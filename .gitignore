@@ -1,0 +1,7 @@
+*.pu.c
+*.i
+*.o
+profile.json
+perf.data
+target
+sliced_crates

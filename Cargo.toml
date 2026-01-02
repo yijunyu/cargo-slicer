@@ -1,0 +1,67 @@
+[package]
+name = "cargo-slicer"
+version = "0.1.0"
+edition = "2021"
+default-run = "cargo-slicer"
+
+[dependencies]
+rayon = "1.8"
+rustc-hash = "1.1"
+once_cell = "1.18"
+parking_lot = "0.12"  # Faster mutex for single-threaded hot paths
+regex = "1"           # For scanning code content for prototype references
+memchr = "2"          # Fast byte search for key parsing
+aho-corasick = "1.1"  # Fast multi-pattern matching for std import detection
+mimalloc = { version = "0.1", default-features = false }  # Fast allocator for multi-threaded
+serde = { version = "1.0", features = ["derive"] }  # For cross-file dependency manifest
+serde_json = "1.0"    # JSON output for dependency manifest
+glob = "0.3"          # For finding PU files in cross-file optimization
+chrono = "0.4"        # For timestamp formatting in benchmark_modes
+rand = "0.8"          # For shuffling in test_batch sampling
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }  # For Rust source parsing in cargo-slicer
+quote = "1.0"         # For Rust code generation in cargo-slicer
+proc-macro2 = { version = "1.0", features = ["span-locations"] }  # Token handling with source locations
+
+# Cargo manifest parsing and metadata
+cargo_toml = "0.20"   # Proper Cargo.toml parsing with serde
+cargo_metadata = "0.18"  # Dependency graph from cargo metadata
+
+# SCIP index parsing for rust-analyzer batch mode
+scip = "0.6"          # Parse rust-analyzer SCIP output
+protobuf = "3.7"      # For parsing SCIP protobuf format
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+#debug = true
+debug = false
+# lto = "thin"  # Thin LTO for better optimization (avoid "fat" due to C code segfaults)
+lto = "thin"  # Thin LTO for better optimization (avoid "fat" due to C code segfaults)
+#codegen-units = 1  # Better optimization with single codegen unit
+codegen-units = 16  # Better optimization with single codegen unit
+#opt-level = 3      # Maximum optimization
+opt-level = 0      # Maximum optimization
+panic = "abort"
+#split-debuginfo = "off"
+split-debuginfo = "on"
+#incremental = false  # Disable incremental for full optimization
+incremental = true  # Disable incremental for full optimization
+
+[profile.dev]
+debug = true
+opt-level = 0
+codegen-units = 16
+lto = "thin"
+incremental = true
+
+[profile.test]
+debug = true
+
+[[bin]]
+name = "ra_deps"
+path = "src/ra_deps.rs"
+
+[[bin]]
+name = "analyze-errors"
+path = "src/analyze_errors.rs"
