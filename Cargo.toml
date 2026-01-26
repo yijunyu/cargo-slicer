@@ -90,20 +90,3 @@ proptest = "1.4"
 [[bench]]
 name = "slicer_benchmarks"
 harness = false
-
-[[bin]]
-name = "ra_deps"
-path = "src/ra_deps.rs"
-required-features = ["scip-analysis"]
-
-[[bin]]
-name = "check-slicer"
-path = "src/check_slicer.rs"
-
-[[bin]]
-name = "deploy-slicer"
-path = "src/deploy_slicer.rs"
-
-[[bin]]
-name = "check-all-crates"
-path = "src/check_all_crates.rs"
