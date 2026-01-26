@@ -1,0 +1,21 @@
+*.pu.c
+*.i
+*.o
+profile.json
+perf.data
+target
+sliced_*
+*_sliced/
+test_sliced
+crates_to_slice
+diagnostics
+.phase2_cache.json
+.Cargo.toml.backup
+Cargo.toml.full_crates
+Cargo.toml.sliced
+*.log
+.slicer-cache/
+
+# Large files (>100MB)
+dependency_analysis/dependency_decisions.jsonl
+*.jsonl
