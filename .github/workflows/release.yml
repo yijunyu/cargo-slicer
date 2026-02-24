@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux gnu — build on ubuntu-20.04 (glibc 2.31) for maximum compatibility
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-20.04
+            archive: cargo-slicer-x86_64-unknown-linux-gnu.tar.gz
+          # Linux musl — fully static, no glibc dependency
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-20.04
+            archive: cargo-slicer-x86_64-unknown-linux-musl.tar.gz
+          # Windows
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-20.04
+            archive: cargo-slicer-x86_64-pc-windows-gnu.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get install -y musl-tools
+
+      - name: Install mingw (Windows cross-compile)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features
+
+      - name: Package (Linux)
+        if: matrix.target != 'x86_64-pc-windows-gnu'
+        run: |
+          cp target/${{ matrix.target }}/release/cargo-slicer cargo-slicer
+          tar czf ${{ matrix.archive }} cargo-slicer cargo-slicer.sh install.sh README.md
+
+      - name: Package (Windows)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          cp target/${{ matrix.target }}/release/cargo-slicer.exe cargo-slicer.exe
+          zip ${{ matrix.archive }} cargo-slicer.exe cargo-slicer.ps1 install.ps1 README.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cargo-slicer-x86_64-unknown-linux-gnu.tar.gz
+            cargo-slicer-x86_64-unknown-linux-musl.tar.gz
+            cargo-slicer-x86_64-pc-windows-gnu.zip
+          generate_release_notes: true
