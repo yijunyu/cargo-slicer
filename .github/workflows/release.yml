@@ -48,13 +48,17 @@ jobs:
         if: matrix.target != 'x86_64-pc-windows-gnu'
         run: |
           cp target/${{ matrix.target }}/release/cargo-slicer cargo-slicer
-          tar czf ${{ matrix.archive }} cargo-slicer cargo-slicer.sh install.sh README.md
+          FILES=(cargo-slicer README.md)
+          for f in cargo-slicer.sh install.sh; do [[ -f "$f" ]] && FILES+=("$f"); done
+          tar czf ${{ matrix.archive }} "${FILES[@]}"
 
       - name: Package (Windows)
         if: matrix.target == 'x86_64-pc-windows-gnu'
         run: |
           cp target/${{ matrix.target }}/release/cargo-slicer.exe cargo-slicer.exe
-          zip ${{ matrix.archive }} cargo-slicer.exe cargo-slicer.ps1 install.ps1 README.md
+          FILES=(cargo-slicer.exe README.md)
+          for f in cargo-slicer.ps1 install.ps1; do [[ -f "$f" ]] && FILES+=("$f"); done
+          zip ${{ matrix.archive }} "${FILES[@]}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
