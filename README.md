@@ -32,11 +32,11 @@ That's it. No config files, no source changes, no Cargo.toml edits.
 
 | Project | Baseline | With cargo-slicer | Speedup |
 |---------|----------|-------------------|---------|
-| **zed** (500K LOC) | 1,012s | 719s | **-29%** |
-| **rustc** (600K LOC) | 135.8s | 112.4s | **-17%** |
-| **zeroclaw** (86K LOC) | 192.9s | 170.4s | **-12%** |
-| **helix** (100K LOC) | 71.2s | 66.6s | **-6%** |
-| **ripgrep** (50K LOC) | 11.1s | 10.7s | **-4%** |
+| **zed** (500K LOC) | 1,012s | 719s | **1.41x** |
+| **rustc** (600K LOC) | 135.8s | 112.4s | **1.21x** |
+| **zeroclaw** (86K LOC) | 192.9s | 170.4s | **1.13x** |
+| **helix** (100K LOC) | 71.2s | 66.6s | **1.07x** |
+| **ripgrep** (50K LOC) | 11.1s | 10.7s | **1.04x** |
 
 Clean release builds, 3 runs averaged (Feb 2026).
 
