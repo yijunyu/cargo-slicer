@@ -1,0 +1,37 @@
+*.pu.c
+*.i
+*.o
+profile.json
+perf.data
+target
+sliced_*
+*_sliced/
+test_sliced
+crates_to_slice
+diagnostics
+.phase2_cache.json
+.Cargo.toml.backup
+Cargo.toml.full_crates
+Cargo.toml.sliced
+Cargo.toml.orig
+*.log
+.slicer-cache/
+bench-results.db
+
+# Large files (>100MB)
+dependency_analysis/dependency_decisions.jsonl
+*.jsonl
+perf.data.old
+
+# Build artifacts and temporary directories
+*_to_slice/
+bench_*/
+Cargo.toml.sliced.bak
+Cargo.toml.bak
+perf_script_output.txt
+
+# Generated documentation
+ANSWER_NECESSARY_ITEMS.md
+NECESSARY_ITEMS_DETECTION.md
+PERFORMANCE_PHASE5B_OPTIMIZATION.md
+PROJECT_SLICING_IMPLEMENTATION.md
