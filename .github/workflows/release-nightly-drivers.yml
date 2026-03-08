@@ -1,0 +1,119 @@
+name: Release
+
+# Builds the stable cargo-slicer binary bundle and uploads it to the GitHub release.
+# Triggered on release tags only (not daily — no per-nightly driver binary to maintain).
+#
+# The per-nightly driver (cargo-slicer-rustc) is no longer needed: the preferred
+# dead-function-elimination path uses the in-tree -Z dead-fn-elimination flag
+# (see docs/upstream-rfc.md). The RUSTC_WRAPPER fallback still works for unpatched
+# nightlies, but does not require a CI-uploaded driver binary.
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  REPO: yijunyu/cargo-slicer
+
+jobs:
+  build-bundle:
+    name: Build main bundle (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install Rust stable toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Get cargo-slicer version
+        id: version
+        run: |
+          # Read version from install.sh (available in public repo)
+          VERSION=$(grep 'CARGO_SLICER_VERSION=' install.sh | head -1 | sed 's/.*="\(.*\)".*/\1/')
+          [[ -z "$VERSION" ]] && VERSION="0.0.7"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set bundle asset name
+        id: check
+        run: |
+          ASSET="cargo-slicer-${{ matrix.target }}.tar.gz"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "Building bundle: $ASSET"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: bundle-registry-${{ runner.os }}-stable
+          restore-keys: bundle-registry-${{ runner.os }}-
+
+      - name: Clone source
+        run: |
+          git clone --depth=1 --branch componentized --single-branch \
+            https://x-token:${{ secrets.PRIVATE_SOURCE_TOKEN }}@github.com/yijunyu/precc \
+            /tmp/cs-src
+
+      - name: Build cargo-slicer + cargo_slicer_dispatch (stable)
+        run: |
+          # Both binaries built with stable — dispatch must NOT use --features rustc-driver
+          # so it doesn't link librustc_driver.so and survives nightly upgrades.
+          cargo install --path /tmp/cs-src \
+            --bin cargo-slicer --bin cargo_slicer_dispatch \
+            --root /tmp/cs-install
+          mkdir -p dist
+
+      - name: Package bundle
+        run: |
+          ASSET="${{ steps.check.outputs.asset }}"
+          STAGING="$(mktemp -d)"
+          cp /tmp/cs-install/bin/cargo-slicer "$STAGING/"
+          cp /tmp/cs-install/bin/cargo_slicer_dispatch "$STAGING/"
+          cp cargo-slicer.sh "$STAGING/" 2>/dev/null || true
+          mkdir -p dist
+          tar -czf "dist/$ASSET" -C "$STAGING" .
+          echo "Created: dist/$ASSET ($(du -sh "dist/$ASSET" | cut -f1))"
+
+      - name: Ensure release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! gh release view "$TAG" --repo "$REPO" &>/dev/null; then
+            echo "Release $TAG not found — skipping upload."
+            exit 0
+          fi
+
+      - name: Upload bundle asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.version.outputs.tag }}" \
+            "dist/${{ steps.check.outputs.asset }}" \
+            --repo "$REPO" \
+            --clobber
+          echo "Uploaded: ${{ steps.check.outputs.asset }}"
