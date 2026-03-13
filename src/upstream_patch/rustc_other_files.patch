@@ -1,0 +1,121 @@
+diff --git a/compiler/rustc_driver_impl/src/lib.rs b/compiler/rustc_driver_impl/src/lib.rs
+index 9a3d7cc506c..1fd66b2fe31 100644
+--- a/compiler/rustc_driver_impl/src/lib.rs
++++ b/compiler/rustc_driver_impl/src/lib.rs
+@@ -270,6 +270,14 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+ 
+     callbacks.config(&mut config);
+ 
++    // Register CGU filter for -Z dead-fn-elimination (query override, function pointer).
++    // The BFS analysis runs in after_analysis (below) and populates thread-local state.
++    // The CGU filter reads that state when collect_and_partition_mono_items is called
++    // during codegen (which happens after after_analysis).
++    if config.opts.unstable_opts.dead_fn_elimination && config.override_queries.is_none() {
++        config.override_queries = Some(dead_fn_elim_override_queries);
++    }
++
+     let registered_lints = config.register_lints.is_some();
+ 
+     interface::run_compiler(config, |compiler| {
+@@ -370,6 +378,13 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+                 dump_feature_usage_metrics(tcx, metrics_dir);
+             }
+ 
++            // -Z dead-fn-elimination: BFS reachability analysis.
++            // Populates thread-local ELIMINABLE_DEF_IDS, read by the CGU filter
++            // registered above via override_queries.
++            if tcx.sess.opts.unstable_opts.dead_fn_elimination {
++                rustc_mir_transform::dead_fn_elim::run_analysis(tcx);
++            }
++
+             if callbacks.after_analysis(compiler, tcx) == Compilation::Stop {
+                 return early_exit();
+             }
+@@ -391,6 +406,30 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+     })
+ }
+ 
++/// `override_queries` hook for `-Z dead-fn-elimination`.
++/// Overrides `is_codegened_item` to exclude BFS-unreachable functions.
++/// Named function (not closure) so it fits in `Config::override_queries: Option<fn(...)>`.
++fn dead_fn_elim_override_queries(
++    _sess: &rustc_session::Session,
++    providers: &mut rustc_middle::util::Providers,
++) {
++    providers.queries.is_codegened_item = dead_fn_elim_is_codegened_item;
++}
++
++/// Returns `false` for functions identified as unreachable by `-Z dead-fn-elimination`,
++/// suppressing codegen for those functions.
++fn dead_fn_elim_is_codegened_item(tcx: TyCtxt<'_>, def_id: rustc_span::def_id::DefId) -> bool {
++    // Short-circuit: if this is a local item we've identified as eliminable, skip it.
++    if def_id.is_local() {
++        let idx = def_id.index.as_u32() as u64;
++        if rustc_mir_transform::dead_fn_elim::is_eliminable(idx) {
++            return false;
++        }
++    }
++    // Otherwise fall back to the standard provider (checks all_mono_items).
++    tcx.collect_and_partition_mono_items(()).all_mono_items.contains(&def_id)
++}
++
+ fn dump_feature_usage_metrics(tcxt: TyCtxt<'_>, metrics_dir: &Path) {
+     let hash = tcxt.crate_hash(LOCAL_CRATE);
+     let crate_name = tcxt.crate_name(LOCAL_CRATE);
+diff --git a/compiler/rustc_mir_transform/src/lib.rs b/compiler/rustc_mir_transform/src/lib.rs
+index 18b798c01fa..ba4863d08bd 100644
+--- a/compiler/rustc_mir_transform/src/lib.rs
++++ b/compiler/rustc_mir_transform/src/lib.rs
+@@ -42,6 +42,7 @@
+ 
+ use pass_manager::{self as pm, Lint, MirLint, MirPass, WithMinOptLevel};
+ 
++pub mod dead_fn_elim;
+ mod check_pointers;
+ mod cost_checker;
+ mod cross_crate_inline;
+diff --git a/compiler/rustc_monomorphize/src/lib.rs b/compiler/rustc_monomorphize/src/lib.rs
+index 05683940cba..4f31c34dfba 100644
+--- a/compiler/rustc_monomorphize/src/lib.rs
++++ b/compiler/rustc_monomorphize/src/lib.rs
+@@ -17,7 +17,7 @@
+ mod collector;
+ mod errors;
+ mod mono_checks;
+-mod partitioning;
++pub mod partitioning;
+ mod util;
+ 
+ rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
+diff --git a/compiler/rustc_monomorphize/src/partitioning.rs b/compiler/rustc_monomorphize/src/partitioning.rs
+index b87ab840a32..3fc4aca7046 100644
+--- a/compiler/rustc_monomorphize/src/partitioning.rs
++++ b/compiler/rustc_monomorphize/src/partitioning.rs
+@@ -1109,6 +1109,14 @@ fn assert_symbols_are_distinct<'a, 'tcx, I>(tcx: TyCtxt<'tcx>, mono_items: I)
+     }
+ }
+ 
++/// Public shim for `-Z dead-fn-elimination` in `rustc_driver_impl`.
++/// Calls the real `collect_and_partition_mono_items` so the CGU filter can delegate
++/// to the upstream implementation without infinite recursion via the query system.
++#[allow(dead_code, unreachable_pub)]
++pub fn collect_and_partition_mono_items_impl(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitions<'_> {
++    collect_and_partition_mono_items(tcx, ())
++}
++
+ fn collect_and_partition_mono_items(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitions<'_> {
+     let collection_strategy = if tcx.sess.link_dead_code() {
+         MonoItemCollectionStrategy::Eager
+diff --git a/compiler/rustc_session/src/options.rs b/compiler/rustc_session/src/options.rs
+index 7c7e9118d59..226c877b10b 100644
+--- a/compiler/rustc_session/src/options.rs
++++ b/compiler/rustc_session/src/options.rs
+@@ -2283,6 +2283,8 @@ pub(crate) fn parse_align(slot: &mut Option<Align>, v: Option<&str>) -> bool {
+         "emit type and line information for additional data types (default: no)"),
+     debuginfo_compression: DebugInfoCompression = (DebugInfoCompression::None, parse_debuginfo_compression, [TRACKED],
+         "compress debug info sections (none, zlib, zstd, default: none)"),
++    dead_fn_elimination: bool = (false, parse_bool, [UNTRACKED],
++        "eliminate unreachable (from entry-point BFS) functions from codegen (experimental)"),
+     deduplicate_diagnostics: bool = (true, parse_bool, [UNTRACKED],
+         "deduplicate identical diagnostics (default: yes)"),
+     default_visibility: Option<SymbolVisibility> = (None, parse_opt_symbol_visibility, [TRACKED],
