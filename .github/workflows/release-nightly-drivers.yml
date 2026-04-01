@@ -1,12 +1,19 @@
 name: Release
 
-# Builds the stable cargo-slicer binary bundle and uploads it to the GitHub release.
-# Triggered on release tags only (not daily — no per-nightly driver binary to maintain).
+# Builds the stable cargo-slicer + cargo-warmup binary bundle and uploads it to the
+# GitHub release. Triggered on release tags only.
 #
-# The per-nightly driver (cargo-slicer-rustc) is no longer needed: the preferred
+# Bundle contents per platform:
+#   cargo-slicer            — Pre-analysis CLI + virtual slicing entry point
+#   cargo_slicer_dispatch   — RUSTC_WRAPPER for dead fn elimination (stable, no rustc_private)
+#   cargo_warmup_dispatch   — RUSTC_WRAPPER for registry dep cache (stable)
+#   cargo-warmup            — cargo-warmup CLI (init/analyze/status/clean)
+#   cargo-slicer.sh         — Drop-in build script (chains both tools automatically)
+#
+# The per-nightly driver (cargo-slicer-rustc) is no longer in the bundle: the preferred
 # dead-function-elimination path uses the in-tree -Z dead-fn-elimination flag
 # (see docs/upstream-rfc.md). The RUSTC_WRAPPER fallback still works for unpatched
-# nightlies, but does not require a CI-uploaded driver binary.
+# nightlies but does not require a CI-uploaded driver binary.
 
 on:
   release:
@@ -81,12 +88,16 @@ jobs:
           path: cs-src
           fetch-depth: 1
 
-      - name: Build cargo-slicer + cargo_slicer_dispatch (stable)
+      - name: Build all stable binaries
         run: |
-          # Both binaries built with stable — dispatch must NOT use --features rustc-driver
-          # so it doesn't link librustc_driver.so and survives nightly upgrades.
+          # All four dispatch/CLI binaries are stable — they must NOT use
+          # --features rustc-driver so they don't link librustc_driver.so
+          # and survive nightly toolchain upgrades.
           cargo install --path "$GITHUB_WORKSPACE/cs-src" \
-            --bin cargo-slicer --bin cargo_slicer_dispatch \
+            --bin cargo-slicer \
+            --bin cargo_slicer_dispatch \
+            --bin cargo_warmup_dispatch \
+            --bin cargo-warmup \
             --root /tmp/cs-install
           mkdir -p dist
 
@@ -94,12 +105,19 @@ jobs:
         run: |
           ASSET="${{ steps.check.outputs.asset }}"
           STAGING="$(mktemp -d)"
+          # Core slicer binaries
           cp /tmp/cs-install/bin/cargo-slicer "$STAGING/"
           cp /tmp/cs-install/bin/cargo_slicer_dispatch "$STAGING/"
+          # Warmup binaries (new)
+          cp /tmp/cs-install/bin/cargo_warmup_dispatch "$STAGING/"
+          cp /tmp/cs-install/bin/cargo-warmup "$STAGING/"
+          # Build script (chains both tools)
           cp cargo-slicer.sh "$STAGING/" 2>/dev/null || true
           mkdir -p dist
           tar -czf "dist/$ASSET" -C "$STAGING" .
           echo "Created: dist/$ASSET ($(du -sh "dist/$ASSET" | cut -f1))"
+          echo "Bundle contents:"
+          ls -lh "$STAGING/"
 
       - name: Ensure release exists
         env:

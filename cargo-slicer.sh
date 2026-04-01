@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # cargo-slicer.sh — Accelerated Rust build via dead function elimination
+#                   + registry crate pre-compilation cache (cargo-warmup)
 #
 # Usage:
 #   ./cargo-slicer.sh                    # build --release in current dir
 #   ./cargo-slicer.sh /path/to/project   # build a specific project
 #   ./cargo-slicer.sh . --features foo   # extra args passed to cargo build
 #
-# Prefers the in-tree -Z dead-fn-elimination flag (patched nightly).
+# Two complementary optimizations applied together:
+#   1. cargo-warmup  — serves pre-compiled .rlib/.so for registry deps (serde, syn, tokio...)
+#   2. cargo-slicer  — stubs unreachable functions in local crates (codegen filtering)
+#
+# Prefers the in-tree -Z dead-fn-elimination flag (patched nightly) for step 2.
 # Falls back to RUSTC_WRAPPER approach if the flag is not available.
 #
 # Prerequisites (flag path — recommended):
@@ -63,9 +68,27 @@ if [[ "$HAS_ZFLAG" == "true" ]]; then
     echo "=== cargo-slicer: using -Z dead-fn-elimination (in-tree flag) ==="
     cd "$PROJECT_DIR"
 
-    exec cargo +nightly build --release \
-        --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
-        "${EXTRA_ARGS[@]}"
+    WARMUP_DISPATCH="$(command -v cargo_warmup_dispatch 2>/dev/null || true)"
+    WARMUP_CLI="$(command -v cargo-warmup 2>/dev/null || true)"
+
+    if [[ -n "$WARMUP_DISPATCH" && -n "$WARMUP_CLI" ]]; then
+        WARMUP_CACHE_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.initialized"
+        if [[ ! -f "$WARMUP_CACHE_MARKER" ]]; then
+            echo "=== Warming registry dep cache (one-time per toolchain) ==="
+            "$WARMUP_CLI" init --tier=1 2>&1
+            touch "$WARMUP_CACHE_MARKER" 2>/dev/null || true
+            echo ""
+        fi
+        echo "=== Building with -Z dead-fn-elimination + registry cache ==="
+        exec env RUSTC_WRAPPER="$WARMUP_DISPATCH" \
+            cargo +nightly build --release \
+            --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
+            "${EXTRA_ARGS[@]}"
+    else
+        exec cargo +nightly build --release \
+            --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
+            "${EXTRA_ARGS[@]}"
+    fi
 fi
 
 # ── Path B: RUSTC_WRAPPER fallback (pre-patch nightly) ──────────────────
@@ -76,6 +99,8 @@ echo ""
 
 DISPATCH="$(command -v cargo_slicer_dispatch 2>/dev/null || true)"
 DRIVER="$(command -v cargo-slicer-rustc 2>/dev/null || true)"
+WARMUP_DISPATCH="$(command -v cargo_warmup_dispatch 2>/dev/null || true)"
+WARMUP_CLI="$(command -v cargo-warmup 2>/dev/null || true)"
 
 SLICER=""
 _CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
@@ -91,8 +116,7 @@ done
 
 if [[ -z "$DISPATCH" ]]; then
     echo "Error: cargo_slicer_dispatch not found in PATH." >&2
-    echo "Install: cargo +nightly install --path <cargo-slicer-dir> --profile release-rustc \\" >&2
-    echo "           --bin cargo_slicer_dispatch --bin cargo-slicer-rustc --features rustc-driver" >&2
+    echo "Install: curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install.sh | bash" >&2
     exit 1
 fi
 if [[ -z "$DRIVER" ]]; then
@@ -105,21 +129,47 @@ if [[ -z "$SLICER" ]]; then
     exit 1
 fi
 
+# ── Step 0: Warm registry dep cache (cargo-warmup) ──────────────────────
+# Pre-compile top crates.io deps once; subsequent cold builds skip recompiling
+# serde, syn, proc-macro2, tokio, etc.  Adds ~10s one-time per toolchain.
+
+if [[ -n "$WARMUP_DISPATCH" && -n "$WARMUP_CLI" ]]; then
+    WARMUP_CACHE_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.initialized"
+    if [[ ! -f "$WARMUP_CACHE_MARKER" ]]; then
+        echo "=== Step 0/3: Warming registry dep cache (one-time per toolchain) ==="
+        "$WARMUP_CLI" init --tier=1 2>&1
+        touch "$WARMUP_CACHE_MARKER" 2>/dev/null || true
+        echo ""
+    fi
+else
+    echo "Note: cargo-warmup not found — skipping registry dep cache (install.sh installs it)"
+fi
+
 # ── Step 1: Pre-analysis (cross-crate call graph) ───────────────────────
 
 echo "=== Step 1/3: Pre-analyzing cross-crate call graph ==="
 cd "$PROJECT_DIR"
 "$SLICER" pre-analyze 2>&1
 
-# ── Step 2: Build with virtual slicing ──────────────────────────────────
+# ── Step 2: Build with virtual slicing + warmup ──────────────────────────
+# cargo_warmup_dispatch handles registry crates (cached .rlib/.so).
+# It chains to cargo_slicer_dispatch for local crates (MIR stub filtering).
 
 echo ""
-echo "=== Step 2/3: Building with virtual slicing (codegen filtering) ==="
+echo "=== Step 2/3: Building with virtual slicing + registry cache ==="
 
 export CARGO_SLICER_VIRTUAL=1
 export CARGO_SLICER_CODEGEN_FILTER=1
 export CARGO_SLICER_DRIVER="$DRIVER"
-export RUSTC_WRAPPER="$DISPATCH"
+
+if [[ -n "$WARMUP_DISPATCH" ]]; then
+    # Outer wrapper: warmup handles registry deps
+    # Inner wrapper: slicer handles local crates
+    export RUSTC_WRAPPER="$WARMUP_DISPATCH"
+    export CARGO_WARMUP_INNER_WRAPPER="$DISPATCH"
+else
+    export RUSTC_WRAPPER="$DISPATCH"
+fi
 
 NIGHTLY_TOOLCHAIN="nightly"
 IS_RUSTC_TREE=false

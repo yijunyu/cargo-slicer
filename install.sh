@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — Install cargo-slicer from precompiled binaries (v0.0.7)
+# install.sh — Install cargo-slicer + cargo-warmup from precompiled binaries (v0.0.7)
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install.sh | bash
@@ -7,8 +7,10 @@
 # What it installs:
 #   ~/.cargo/bin/cargo-slicer           — Pre-analysis CLI
 #   ~/.cargo/bin/cargo-slicer-rustc     — Rustc driver (MIR analysis + codegen filtering)
-#   ~/.cargo/bin/cargo_slicer_dispatch  — RUSTC_WRAPPER dispatcher
-#   ~/.cargo/bin/cargo-slicer.sh        — Drop-in build script
+#   ~/.cargo/bin/cargo_slicer_dispatch  — RUSTC_WRAPPER dispatcher (dead fn elimination)
+#   ~/.cargo/bin/cargo_warmup_dispatch  — RUSTC_WRAPPER dispatcher (registry dep cache)
+#   ~/.cargo/bin/cargo-warmup           — cargo-warmup CLI (init/analyze/status/clean)
+#   ~/.cargo/bin/cargo-slicer.sh        — Drop-in build script (uses both tools)
 
 set -euo pipefail
 
@@ -130,7 +132,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 if [[ -z "${SKIP_BIN_INSTALL:-}" ]]; then
-    BINARIES=(cargo-slicer cargo_slicer_dispatch cargo-slicer.sh)
+    BINARIES=(cargo-slicer cargo_slicer_dispatch cargo_warmup_dispatch cargo-warmup cargo-slicer.sh)
     for bin in "${BINARIES[@]}"; do
         for search in "$TMPDIR/$bin" "$TMPDIR/cargo-slicer/$bin"; do
             if [[ -f "$search" ]]; then
@@ -173,6 +175,25 @@ else
     ZFLAG_AVAILABLE=false
 fi
 
+# ── Pre-warm registry dep cache (cargo-warmup) ───────────────────────
+# Run once per toolchain: compiles top-20 crates.io deps (serde, syn, tokio...)
+# into ~/.cargo/warmup-cache/ so cold builds of any project skip recompiling them.
+# Adds ~10-30s here; saves 2-9× on every subsequent cold build.
+
+WARMUP_BIN="$INSTALL_DIR/cargo-warmup"
+WARMUP_CACHE_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.initialized"
+
+if [[ -f "$WARMUP_BIN" ]] && [[ ! -f "$WARMUP_CACHE_MARKER" ]]; then
+    echo ""
+    echo "Pre-warming registry dep cache (one-time, ~15-30s)..."
+    "$WARMUP_BIN" init --tier=1 2>&1 | grep -E "warmup|Compiling|Finished|error" || true
+    touch "$WARMUP_CACHE_MARKER" 2>/dev/null || true
+    echo "  Registry dep cache ready."
+elif [[ -f "$WARMUP_CACHE_MARKER" ]]; then
+    echo ""
+    echo "Registry dep cache already initialized (run 'cargo warmup status' to inspect)."
+fi
+
 # ── Verify PATH ───────────────────────────────────────────────────────
 
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$(dirname "$INSTALL_DIR/cargo-slicer")"; then
@@ -186,32 +207,42 @@ fi
 
 echo ""
 echo "============================================"
-echo "  cargo-slicer installed successfully!"
+echo "  cargo-slicer + cargo-warmup installed!"
 echo "============================================"
 echo ""
-echo "Quick start — accelerate any Rust project:"
+echo "Quick start — accelerate any Rust project (both tools combined):"
 echo ""
 echo "  cargo-slicer.sh /path/to/your/project"
 echo ""
+echo "What happens:"
+echo "  1. cargo-warmup serves pre-compiled .rlib/.so for serde/syn/tokio/..."
+echo "     (registry deps — 1.5–9× speedup on cold builds)"
+echo "  2. cargo-slicer stubs unreachable functions in your local crates"
+echo "     (dead code elimination — 10–50% codegen time saved)"
+echo ""
 if [[ "${ZFLAG_AVAILABLE:-false}" == "true" ]]; then
-    echo "Or with the in-tree flag (patched nightly):"
+    echo "Advanced — combined one-liner (patched nightly with -Z flag):"
     echo ""
     echo "  cd /path/to/your/project"
-    echo "  RUSTFLAGS=\"-Z dead-fn-elimination\" cargo +nightly build --release"
+    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_dispatch) \\"
+    echo "    cargo +nightly build --release \\"
+    echo "    --config 'build.rustflags=[\"-Z\", \"dead-fn-elimination\"]'"
     echo ""
 else
-    echo "Or manually (RUSTC_WRAPPER path):"
+    echo "Advanced — combined one-liner (RUSTC_WRAPPER chain):"
     echo ""
     echo "  cd /path/to/your/project"
     echo "  cargo-slicer pre-analyze"
-    echo "  CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \\"
-    echo "    RUSTC_WRAPPER=\$(which cargo_slicer_dispatch) \\"
+    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_dispatch) \\"
+    echo "    CARGO_WARMUP_INNER_WRAPPER=\$(which cargo_slicer_dispatch) \\"
+    echo "    CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \\"
     echo "    cargo +nightly build --release"
     echo ""
-    echo "For the preferred in-tree path, see: docs/upstream-rfc.md"
+    echo "For the in-tree -Z flag, see: docs/upstream-rfc.md"
     echo ""
 fi
-echo "Documentation: https://github.com/$REPO"
+echo "Registry dep cache: ~/.cargo/warmup-cache/  (run 'cargo warmup status')"
+echo "Documentation:      https://github.com/$REPO"
 
 # ── Detect rust compiler checkout and install x.py hook ───────────────
 # If we're in a rust-lang/rust checkout (has x.py + src/stage0), install
