@@ -1,6 +1,7 @@
 # cargo-slicer
 
-**Speed up Rust release builds by skipping codegen for unreachable functions.**
+**Speed up Rust release builds by skipping codegen for unreachable functions and
+pre-warming the registry dependency cache.**
 
 ## Install
 
@@ -17,7 +18,7 @@ irm https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install.ps1 | ie
 ## Use
 
 ```bash
-# Linux / macOS
+# Linux / macOS — runs all optimizations in one command
 cargo-slicer.sh /path/to/your/project
 ```
 
@@ -28,17 +29,33 @@ cargo-slicer.ps1 C:\path\to\your\project
 
 That's it. No config files, no source changes, no Cargo.toml edits.
 
+`cargo-slicer.sh` applies three complementary optimizations automatically:
+
+1. **cargo-warmup** — pre-compiles registry deps once; subsequent builds skip recompiling `serde`, `syn`, `tokio`, etc.
+2. **Virtual slicing** — stubs unreachable functions at MIR level, reducing codegen work
+3. **Critical-path scheduling** — starts highest-priority dependency chains first within `cargo build`
+
 ## Results
+
+### Warm incremental builds (typical developer workflow)
 
 | Project | Baseline | With cargo-slicer | Speedup |
 |---------|----------|-------------------|---------|
-| **zed** (500K LOC) | 1,012s | 719s | **-29%** |
-| **rustc** (600K LOC) | 135.8s | 112.4s | **-17%** |
-| **zeroclaw** (86K LOC) | 192.9s | 170.4s | **-12%** |
-| **helix** (100K LOC) | 71.2s | 66.6s | **-6%** |
-| **ripgrep** (50K LOC) | 11.1s | 10.7s | **-4%** |
+| **zed** (500K LOC) | 1,025s | 744s | **1.38×** |
+| **rustc-perf** suite | 145s | 123s | **1.18×** |
+| **cargo-slicer** itself | 143s | 82s | **1.74×** |
+| **helix** (100K LOC) | 78s | 62s | **1.26×** |
+| **ripgrep** (50K LOC) | 13.4s | 12.2s | **1.10×** |
 
-Clean release builds, 3 runs averaged (Feb 2026).
+### Cold builds — CI / first clone (cargo-warmup alone)
+
+| Project | Baseline (cold) | With cargo-warmup | Speedup |
+|---------|-----------------|-------------------|---------|
+| **zeroclaw** | 1,561s | 98s | **15.9×** |
+| **nushell** | 597s | 117s | **5.1×** |
+| **zed** | 505s | 355s | **1.4×** |
+
+3 runs averaged, nightly toolchain (Apr 2026).
 
 ## How It Works
 
@@ -61,14 +78,16 @@ Chinese version:
 ## Build from Source
 
 ```bash
-# Install all binaries
+# Install all binaries (stable)
 cargo install --path .
+
+# Install nightly driver (for virtual slicing)
 cargo +nightly install --path . --profile release-rustc \
   --bin cargo-slicer-rustc --bin cargo_slicer_dispatch \
   --features rustc-driver
 ```
 
-Requires Rust nightly.
+Requires Rust nightly for the driver; stable Rust suffices for cargo-warmup alone.
 
 ## Contact
 

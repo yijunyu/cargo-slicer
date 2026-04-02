@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# cargo-slicer.sh — Accelerated Rust build via dead function elimination
-#                   + registry crate pre-compilation cache (cargo-warmup)
+# cargo-slicer.sh — Accelerated Rust build: dead function elimination
+#                   + registry cache + critical-path dep scheduling
 #
 # Usage:
 #   ./cargo-slicer.sh                    # build --release in current dir
 #   ./cargo-slicer.sh /path/to/project   # build a specific project
 #   ./cargo-slicer.sh . --features foo   # extra args passed to cargo build
 #
-# Two complementary optimizations applied together:
-#   1. cargo-warmup  — serves pre-compiled .rlib/.so for registry deps (serde, syn, tokio...)
-#   2. cargo-slicer  — stubs unreachable functions in local crates (codegen filtering)
+# Three complementary optimizations applied together:
+#   1. cargo-warmup      — serves pre-compiled .rlib/.so for registry deps
+#   2. cargo-slicer      — stubs unreachable functions in local crates
+#   3. pch-plan priority — starts highest critical-path deps first
+#
+# The three form a chain:
+#   RUSTC_WRAPPER=cargo_warmup_pch        (outermost: priority scheduler)
+#     CARGO_WARMUP_INNER_WRAPPER=cargo_warmup_dispatch  (cache server)
+#       CARGO_WARMUP_INNER_WRAPPER2=cargo_slicer_dispatch  (MIR stubs)
 #
 # Prefers the in-tree -Z dead-fn-elimination flag (patched nightly) for step 2.
 # Falls back to RUSTC_WRAPPER approach if the flag is not available.
@@ -69,21 +75,45 @@ if [[ "$HAS_ZFLAG" == "true" ]]; then
     cd "$PROJECT_DIR"
 
     WARMUP_DISPATCH="$(command -v cargo_warmup_dispatch 2>/dev/null || true)"
+    WARMUP_PCH="$(command -v cargo_warmup_pch 2>/dev/null || true)"
     WARMUP_CLI="$(command -v cargo-warmup 2>/dev/null || true)"
 
     if [[ -n "$WARMUP_DISPATCH" && -n "$WARMUP_CLI" ]]; then
-        WARMUP_CACHE_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.initialized"
+        WARMUP_CACHE_MARKER="$HOME/.cargo/warmup-cache/.initialized"
         if [[ ! -f "$WARMUP_CACHE_MARKER" ]]; then
-            echo "=== Warming registry dep cache (one-time per toolchain) ==="
+            echo "=== Step 1/3: Warming registry dep cache (one-time per toolchain) ==="
             "$WARMUP_CLI" init --tier=1 2>&1
             touch "$WARMUP_CACHE_MARKER" 2>/dev/null || true
             echo ""
         fi
-        echo "=== Building with -Z dead-fn-elimination + registry cache ==="
-        exec env RUSTC_WRAPPER="$WARMUP_DISPATCH" \
-            cargo +nightly build --release \
-            --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
-            "${EXTRA_ARGS[@]}"
+
+        # Compute pch-plan if priority scheduler is available
+        _PLAN_FILE=""
+        if [[ -n "$WARMUP_PCH" ]]; then
+            _PLAN_HASH="$(printf '%s' "$PROJECT_DIR" | md5sum | cut -c1-12)"
+            _PLAN_FILE="/tmp/cargo-warmup-plan-${_PLAN_HASH}.json"
+            echo "=== Step 2/3: Computing critical-path priority plan ==="
+            "$WARMUP_CLI" pch-plan \
+                --manifest="$PROJECT_DIR/Cargo.toml" \
+                --output="$_PLAN_FILE" 2>&1 || _PLAN_FILE=""
+            echo ""
+        fi
+
+        echo "=== Step 3/3: Building with -Z dead-fn-elimination + registry cache + priority ==="
+        if [[ -n "$WARMUP_PCH" && -n "$_PLAN_FILE" && -f "$_PLAN_FILE" ]]; then
+            exec env \
+                RUSTC_WRAPPER="$WARMUP_PCH" \
+                CARGO_WARMUP_PLAN="$_PLAN_FILE" \
+                CARGO_WARMUP_INNER_WRAPPER="$WARMUP_DISPATCH" \
+                cargo +nightly build --release \
+                --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
+                "${EXTRA_ARGS[@]}"
+        else
+            exec env RUSTC_WRAPPER="$WARMUP_DISPATCH" \
+                cargo +nightly build --release \
+                --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
+                "${EXTRA_ARGS[@]}"
+        fi
     else
         exec cargo +nightly build --release \
             --config 'build.rustflags=["-Z", "dead-fn-elimination"]' \
@@ -100,6 +130,7 @@ echo ""
 DISPATCH="$(command -v cargo_slicer_dispatch 2>/dev/null || true)"
 DRIVER="$(command -v cargo-slicer-rustc 2>/dev/null || true)"
 WARMUP_DISPATCH="$(command -v cargo_warmup_dispatch 2>/dev/null || true)"
+WARMUP_PCH="$(command -v cargo_warmup_pch 2>/dev/null || true)"
 WARMUP_CLI="$(command -v cargo-warmup 2>/dev/null || true)"
 
 SLICER=""
@@ -134,9 +165,10 @@ fi
 # serde, syn, proc-macro2, tokio, etc.  Adds ~10s one-time per toolchain.
 
 if [[ -n "$WARMUP_DISPATCH" && -n "$WARMUP_CLI" ]]; then
-    WARMUP_CACHE_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.initialized"
+    # Marker always in real ~/.cargo so a custom CARGO_HOME doesn't retrigger init
+    WARMUP_CACHE_MARKER="$HOME/.cargo/warmup-cache/.initialized"
     if [[ ! -f "$WARMUP_CACHE_MARKER" ]]; then
-        echo "=== Step 0/3: Warming registry dep cache (one-time per toolchain) ==="
+        echo "=== Step 0/4: Warming registry dep cache (one-time per toolchain) ==="
         "$WARMUP_CLI" init --tier=1 2>&1
         touch "$WARMUP_CACHE_MARKER" 2>/dev/null || true
         echo ""
@@ -147,24 +179,50 @@ fi
 
 # ── Step 1: Pre-analysis (cross-crate call graph) ───────────────────────
 
-echo "=== Step 1/3: Pre-analyzing cross-crate call graph ==="
+echo "=== Step 1/4: Pre-analyzing cross-crate call graph ==="
 cd "$PROJECT_DIR"
 "$SLICER" pre-analyze 2>&1
 
-# ── Step 2: Build with virtual slicing + warmup ──────────────────────────
-# cargo_warmup_dispatch handles registry crates (cached .rlib/.so).
-# It chains to cargo_slicer_dispatch for local crates (MIR stub filtering).
+# ── Step 2: Critical-path priority plan ─────────────────────────────────
+# Read the unit-graph, assign compile-time estimates from warmup cache,
+# compute CP(unit) = self_weight + max(CP(dep)) for every unit.
+# Stored in /tmp keyed by project path hash — never pollutes the project dir.
+
+_PLAN_FILE=""
+if [[ -n "$WARMUP_CLI" && -n "$WARMUP_PCH" ]]; then
+    _PLAN_HASH="$(printf '%s' "$PROJECT_DIR" | md5sum | cut -c1-12)"
+    _PLAN_FILE="/tmp/cargo-warmup-plan-${_PLAN_HASH}.json"
+    echo ""
+    echo "=== Step 2/4: Computing critical-path priority plan ==="
+    "$WARMUP_CLI" pch-plan \
+        --manifest="$PROJECT_DIR/Cargo.toml" \
+        --output="$_PLAN_FILE" 2>&1 || {
+        echo "Note: pch-plan failed (non-nightly cargo?), skipping priority scheduling"
+        _PLAN_FILE=""
+    }
+fi
+
+# ── Step 3: Build with priority scheduling + warmup + virtual slicing ────
+# Wrapper chain (outermost → innermost):
+#   cargo_warmup_pch      — priority scheduler (starts highest-CP units first)
+#   cargo_warmup_dispatch — registry cache     (serves .rlib/.so hits)
+#   cargo_slicer_dispatch — MIR stubs          (eliminates unreachable fn codegen)
 
 echo ""
-echo "=== Step 2/3: Building with virtual slicing + registry cache ==="
+echo "=== Step 3/4: Building with priority scheduling + registry cache + MIR stubs ==="
 
 export CARGO_SLICER_VIRTUAL=1
 export CARGO_SLICER_CODEGEN_FILTER=1
 export CARGO_SLICER_DRIVER="$DRIVER"
 
-if [[ -n "$WARMUP_DISPATCH" ]]; then
-    # Outer wrapper: warmup handles registry deps
-    # Inner wrapper: slicer handles local crates
+if [[ -n "$WARMUP_PCH" && -n "$_PLAN_FILE" && -f "$_PLAN_FILE" ]]; then
+    # Full three-layer chain
+    export RUSTC_WRAPPER="$WARMUP_PCH"
+    export CARGO_WARMUP_PLAN="$_PLAN_FILE"
+    export CARGO_WARMUP_INNER_WRAPPER="$WARMUP_DISPATCH"
+    export CARGO_WARMUP_INNER_WRAPPER2="$DISPATCH"
+elif [[ -n "$WARMUP_DISPATCH" ]]; then
+    # No pch priority, but warmup + slicer
     export RUSTC_WRAPPER="$WARMUP_DISPATCH"
     export CARGO_WARMUP_INNER_WRAPPER="$DISPATCH"
 else
@@ -199,10 +257,10 @@ fi
 
 time cargo +"$NIGHTLY_TOOLCHAIN" build --release "${EXTRA_ARGS[@]}" 2>&1
 
-# ── Step 3: Summary ─────────────────────────────────────────────────────
+# ── Step 4: Summary ─────────────────────────────────────────────────────
 
 echo ""
-echo "=== Step 3/3: Done ==="
+echo "=== Step 4/4: Done ==="
 echo "Project:  $PROJECT_DIR"
 echo "Binary:   $(find "$PROJECT_DIR/target/release" -maxdepth 1 -type f -executable 2>/dev/null | head -5)"
 
