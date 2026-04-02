@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — Install cargo-slicer + cargo-warmup from precompiled binaries (v0.0.7)
+# install.sh — Install cargo-slicer + cargo-warmup from precompiled binaries (v0.0.8)
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install.sh | bash
@@ -9,13 +9,14 @@
 #   ~/.cargo/bin/cargo-slicer-rustc     — Rustc driver (MIR analysis + codegen filtering)
 #   ~/.cargo/bin/cargo_slicer_dispatch  — RUSTC_WRAPPER dispatcher (dead fn elimination)
 #   ~/.cargo/bin/cargo_warmup_dispatch  — RUSTC_WRAPPER dispatcher (registry dep cache)
-#   ~/.cargo/bin/cargo-warmup           — cargo-warmup CLI (init/analyze/status/clean)
-#   ~/.cargo/bin/cargo-slicer.sh        — Drop-in build script (uses both tools)
+#   ~/.cargo/bin/cargo_warmup_pch       — RUSTC_WRAPPER priority scheduler (critical-path ordering)
+#   ~/.cargo/bin/cargo-warmup           — cargo-warmup CLI (init/status/clean/schedule/pch-plan)
+#   ~/.cargo/bin/cargo-slicer.sh        — Drop-in build script (all 4 steps in one command)
 
 set -euo pipefail
 
 REPO="yijunyu/cargo-slicer"
-CARGO_SLICER_VERSION="0.0.7"
+CARGO_SLICER_VERSION="0.0.8"
 INSTALL_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 # ── Detect platform ───────────────────────────────────────────────────
@@ -132,7 +133,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 if [[ -z "${SKIP_BIN_INSTALL:-}" ]]; then
-    BINARIES=(cargo-slicer cargo_slicer_dispatch cargo_warmup_dispatch cargo-warmup cargo-slicer.sh)
+    BINARIES=(cargo-slicer cargo_slicer_dispatch cargo_warmup_dispatch cargo_warmup_pch cargo-warmup cargo-slicer.sh)
     for bin in "${BINARIES[@]}"; do
         for search in "$TMPDIR/$bin" "$TMPDIR/cargo-slicer/$bin"; do
             if [[ -f "$search" ]]; then
@@ -214,27 +215,31 @@ echo "Quick start — accelerate any Rust project (both tools combined):"
 echo ""
 echo "  cargo-slicer.sh /path/to/your/project"
 echo ""
-echo "What happens:"
+echo "What happens (4 steps, fully automatic):"
 echo "  1. cargo-warmup serves pre-compiled .rlib/.so for serde/syn/tokio/..."
-echo "     (registry deps — 1.5–9× speedup on cold builds)"
-echo "  2. cargo-slicer stubs unreachable functions in your local crates"
-echo "     (dead code elimination — 10–50% codegen time saved)"
+echo "     (registry deps — up to 15.9× on cold builds, 1.1–1.7× incremental)"
+echo "  2. cargo-slicer pre-analyzes the cross-crate call graph"
+echo "  3. cargo warmup pch-plan computes critical-path build order"
+echo "  4. cargo-slicer stubs unreachable functions via MIR"
+echo "     (dead code elimination — 10–42% codegen time saved)"
 echo ""
 if [[ "${ZFLAG_AVAILABLE:-false}" == "true" ]]; then
-    echo "Advanced — combined one-liner (patched nightly with -Z flag):"
+    echo "Advanced — with patched nightly (-Z dead-fn-elimination):"
     echo ""
     echo "  cd /path/to/your/project"
-    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_dispatch) \\"
+    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_pch) \\"
+    echo "    CARGO_WARMUP_INNER_WRAPPER=\$(which cargo_warmup_dispatch) \\"
     echo "    cargo +nightly build --release \\"
     echo "    --config 'build.rustflags=[\"-Z\", \"dead-fn-elimination\"]'"
     echo ""
 else
-    echo "Advanced — combined one-liner (RUSTC_WRAPPER chain):"
+    echo "Advanced — manual 3-layer RUSTC_WRAPPER chain:"
     echo ""
     echo "  cd /path/to/your/project"
     echo "  cargo-slicer pre-analyze"
-    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_dispatch) \\"
-    echo "    CARGO_WARMUP_INNER_WRAPPER=\$(which cargo_slicer_dispatch) \\"
+    echo "  RUSTC_WRAPPER=\$(which cargo_warmup_pch) \\"
+    echo "    CARGO_WARMUP_INNER_WRAPPER=\$(which cargo_warmup_dispatch) \\"
+    echo "    CARGO_WARMUP_INNER_WRAPPER2=\$(which cargo_slicer_dispatch) \\"
     echo "    CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \\"
     echo "    cargo +nightly build --release"
     echo ""
