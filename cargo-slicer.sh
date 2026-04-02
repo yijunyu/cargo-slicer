@@ -181,6 +181,7 @@ fi
 
 echo "=== Step 1/4: Pre-analyzing cross-crate call graph ==="
 cd "$PROJECT_DIR"
+mkdir -p "$PROJECT_DIR/.slicer-cache"
 "$SLICER" pre-analyze 2>&1
 
 # ── Step 2: Critical-path priority plan ─────────────────────────────────
