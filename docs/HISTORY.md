@@ -2,6 +2,67 @@
 
 This document tracks major achievements, optimizations, and milestones.
 
+## April 2026
+
+### April 2, 2026 — cargo-warmup + priority scheduling; OpaqueTy / pch-overhead fixes
+
+#### cargo-warmup: registry dep cache (R3)
+- New `cargo_warmup_dispatch` RUSTC_WRAPPER: caches compiled `.rlib`/`.rmeta`/`.so` for
+  registry crates by semantic key `(crate, version, rustc, features)` — topology-independent.
+- `cargo-warmup init --tier=1` pre-compiles top-500 crates.io deps once per toolchain (~10 min).
+- Cache hits serve pre-built artifacts in <1ms; subsequent cold builds skip recompiling
+  `serde`, `syn`, `proc-macro2`, `tokio`, etc.
+- **Cold-build results**: zeroclaw 1,561s → 98s (**15.9×**), nushell 597s → 117s (**5.1×**),
+  zed 505s → 355s (**1.4×**). Zed's lower gain is expected: WebRTC C++ build script cannot
+  be cached as an rlib.
+
+#### Multi-project build ordering (`cargo warmup schedule` / `build-all`)
+- Greedy "heaviest-overlap-first" algorithm: seed = project with largest total dep weight;
+  each subsequent pick = project maximising overlap with accumulated cache set.
+- Approximation ratio ≥ 63% of NP-hard optimal (submodular maximisation bound).
+- Dep compile times estimated from rlib size: `estimated_ms = size_bytes / 350` (clamped
+  100–60,000ms, empirically ~1MB ≈ 3s compile time).
+- `cargo warmup schedule <dir1> <dir2> ...` prints recommended build order + predicted savings.
+- `cargo warmup build-all <dir1> <dir2> ...` runs builds in that order.
+
+#### Single-project critical-path scheduling (`cargo warmup pch-plan` + `cargo_warmup_pch`)
+- `cargo warmup pch-plan --manifest Cargo.toml --output plan.json`: reads
+  `cargo build -Z unstable-options --unit-graph`, assigns compile-time estimates,
+  computes CP(unit) = self_weight + max(CP(dep)) via Kahn topological sort bottom-up.
+- `cargo_warmup_pch` RUSTC_WRAPPER: priority daemon over Unix domain socket; high-CP units
+  admitted first, low-CP units wait until a slot frees. Cargo sees normal rustc subprocesses.
+- **Registry bypass fix** (same day): daemon round-trip was applied to every rustc invocation
+  including instant cache hits, eliminating warmup gains. Fix: detect `/.cargo/registry/` in
+  source path early and short-circuit to `warmup_dispatch` directly. Overhead dropped from
+  O(units × 5ms) to negligible.
+
+#### Three-layer wrapper chain integrated into `cargo-slicer.sh`
+- Single command `cargo-slicer.sh /path/to/project` now runs all four steps automatically:
+  1. Warm registry dep cache (once per toolchain)
+  2. Cross-crate call graph pre-analysis
+  3. Critical-path priority plan
+  4. Build: `cargo_warmup_pch` → `cargo_warmup_dispatch` → `cargo_slicer_dispatch`
+- Graceful fallback at each level if any component is unavailable.
+- Also handles `-Z dead-fn-elimination` in-tree flag path (A) vs RUSTC_WRAPPER fallback (B).
+
+#### Bug fix: `DefKind::OpaqueTy` / `SyntheticCoroutineBody` causing E0391 in zeroclaw
+- Virtual slicer's `is_safe_to_skip()` did not guard `DefKind::OpaqueTy` (the `{opaque#N}`
+  return types of async fns). Stubbing these caused "cycle detected when computing type of
+  opaque" (E0391) errors in projects with heavy async usage (zeroclaw).
+- Fix: added `DefKind::OpaqueTy => return false` and `DefKind::SyntheticCoroutineBody =>
+  return false` to the DefKind match. Zeroclaw now builds cleanly (13m26s, 0 errors).
+
+#### Warm-incremental benchmark summary (Apr 2026, 3 runs averaged)
+| Project | Baseline | vslice-cc | Speedup |
+|---------|----------|-----------|---------|
+| zed | 1,025s | 744s | **1.38×** |
+| rustc-perf suite | 145s | 123s | **1.18×** |
+| cargo-slicer | 143s | 82s | **1.74×** |
+| helix | 78s | 62s | **1.26×** |
+| ripgrep | 13.4s | 12.2s | **1.10×** |
+
+**Tag**: `tse_submission_cutting_warming`
+
 ## February 2026
 
 ### February 14, 2026 — Critical Bug Fix: Std Trait Method Resolution
