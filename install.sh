@@ -168,15 +168,28 @@ if [[ -z "${SKIP_BIN_INSTALL:-}" ]] && [[ "$_SOURCE_INSTALLED" != "true" ]]; the
         done
     done
 elif [[ "$_SOURCE_INSTALLED" == "true" ]]; then
-    # Still install cargo-slicer.sh from the tarball (it's a shell script, always compatible)
-    for search in "$TMPDIR/cargo-slicer.sh" "$TMPDIR/cargo-slicer/cargo-slicer.sh"; do
+    # When installed from source, prefer the local cargo-slicer.sh (most up to date)
+    # Fall back to tarball version if local not found
+    _SH_INSTALLED=false
+    for search in "$PWD/cargo-slicer.sh" "$HOME/precc-c/cargo-slicer.sh" "$HOME/precc/cargo-slicer.sh"; do
         if [[ -f "$search" ]]; then
             cp "$search" "$INSTALL_DIR/cargo-slicer.sh"
             chmod +x "$INSTALL_DIR/cargo-slicer.sh"
-            echo "  Installed: $INSTALL_DIR/cargo-slicer.sh"
+            echo "  Installed: $INSTALL_DIR/cargo-slicer.sh (from local source)"
+            _SH_INSTALLED=true
             break
         fi
     done
+    if [[ "$_SH_INSTALLED" != "true" ]]; then
+        for search in "$TMPDIR/cargo-slicer.sh" "$TMPDIR/cargo-slicer/cargo-slicer.sh"; do
+            if [[ -f "$search" ]]; then
+                cp "$search" "$INSTALL_DIR/cargo-slicer.sh"
+                chmod +x "$INSTALL_DIR/cargo-slicer.sh"
+                echo "  Installed: $INSTALL_DIR/cargo-slicer.sh"
+                break
+            fi
+        done
+    fi
 fi
 
 echo ""
