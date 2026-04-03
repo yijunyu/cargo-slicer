@@ -64,13 +64,14 @@ if [[ "$IS_RUST" == "true" && "$IS_C" == "true" ]]; then
     IS_MIXED=true
 fi
 # Also detect: Rust project whose build.rs uses cc/cmake crate (no top-level Makefile needed)
+# Search up to 4 levels deep to catch workspace members (e.g. zstd-safe/build.rs)
 if [[ "$IS_RUST" == "true" && "$IS_MIXED" == "false" ]]; then
-    for _brs in "$PROJECT_DIR/build.rs" "$PROJECT_DIR"/*/build.rs; do
-        if [[ -f "$_brs" ]] && grep -qE '"cc"|"cmake"|"cmake-rs"|extern_c|cc::Build|cmake::Config' "$_brs" 2>/dev/null; then
+    while IFS= read -r _brs; do
+        if /usr/bin/grep -qE '"cc"|"cmake"|"cmake-rs"|cc::Build|cmake::Config' "$_brs" 2>/dev/null; then
             IS_MIXED=true
             break
         fi
-    done
+    done < <(/usr/bin/find "$PROJECT_DIR" -maxdepth 4 -name build.rs 2>/dev/null)
 fi
 
 # Pure Rust if not mixed
