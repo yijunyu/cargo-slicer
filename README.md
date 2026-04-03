@@ -1,7 +1,11 @@
 # cargo-slicer
 
-**Speed up Rust release builds by skipping codegen for unreachable functions and
-pre-warming the registry dependency cache.**
+**Speed up builds by skipping codegen for unreachable functions and pre-warming
+the compiler cache — for both Rust and C/C++ projects.**
+
+![demo](demo.gif)
+
+> **Quick demo**: [README.demo.md](README.demo.md) — annotated example output for Rust and C/C++ projects.
 
 ## Install
 
@@ -18,26 +22,38 @@ irm https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install.ps1 | ie
 ## Use
 
 ```bash
-# Linux / macOS — runs all optimizations in one command
-cargo-slicer.sh /path/to/your/project
+# Auto-detects Rust or C/C++ project
+build-accelerate.sh /path/to/your/project
+```
+
+```bash
+# Rust-only script
+cargo-slicer.sh /path/to/rust/project
 ```
 
 ```powershell
-# Windows (PowerShell)
+# Windows (Rust, PowerShell)
 cargo-slicer.ps1 C:\path\to\your\project
 ```
 
-That's it. No config files, no source changes, no Cargo.toml edits.
+No config files, no source changes, no build system edits.
 
-`cargo-slicer.sh` applies three complementary optimizations automatically:
+`build-accelerate.sh` detects the project type and applies the right optimizations:
+
+**Rust projects** (`Cargo.toml` present) — three complementary optimizations:
 
 1. **cargo-warmup** — pre-compiles registry deps once; subsequent builds skip recompiling `serde`, `syn`, `tokio`, etc.
 2. **Virtual slicing** — stubs unreachable functions at MIR level, reducing codegen work
 3. **Critical-path scheduling** — starts highest-priority dependency chains first within `cargo build`
 
+**C/C++ projects** (`compile_commands.json` / `CMakeLists.txt` / `Makefile`) — PCH injection:
+
+1. **clang-daemon** — compiles a fat precompiled header once, injects it into every parallel compilation unit via a drop-in `CC`/`CXX` replacement
+2. **Auto fat-header detection** — scans `compile_commands.json` for the most-included headers; falls back to heuristics for Linux kernel, LLVM, Qt, and generic C++ projects
+
 ## Results
 
-### Warm incremental builds (typical developer workflow)
+### Rust — warm incremental builds (typical developer workflow)
 
 | Project | Baseline | With cargo-slicer | Speedup |
 |---------|----------|-------------------|---------|
@@ -47,13 +63,20 @@ That's it. No config files, no source changes, no Cargo.toml edits.
 | **helix** (100K LOC) | 78s | 62s | **1.26×** |
 | **ripgrep** (50K LOC) | 13.4s | 12.2s | **1.10×** |
 
-### Cold builds — CI / first clone (cargo-warmup alone)
+### Rust — cold builds (CI / first clone, cargo-warmup alone)
 
 | Project | Baseline (cold) | With cargo-warmup | Speedup |
 |---------|-----------------|-------------------|---------|
 | **zeroclaw** | 1,561s | 98s | **15.9×** |
 | **nushell** | 597s | 117s | **5.1×** |
 | **zed** | 505s | 355s | **1.4×** |
+
+### C/C++ — parallel builds (clang-daemon + PCH, -j48)
+
+| Project | Baseline | With clang-daemon | Speedup |
+|---------|----------|-------------------|---------|
+| **LLVM 21** (6,400 TUs) | — | — | **1.22×** |
+| **Linux kernel** (26K TUs) | — | — | **up to 1.3× on large TUs** |
 
 3 runs averaged, nightly toolchain (Apr 2026).
 
@@ -78,16 +101,21 @@ Chinese version:
 ## Build from Source
 
 ```bash
-# Install all binaries (stable)
+# Install all Rust binaries (stable)
 cargo install --path .
 
 # Install nightly driver (for virtual slicing)
 cargo +nightly install --path . --profile release-rustc \
   --bin cargo-slicer-rustc --bin cargo_slicer_dispatch \
   --features rustc-driver
+
+# Build C/C++ daemon (requires a C++17 compiler)
+make -C clang-daemon
+cp clang-daemon/clang-daemon-{server,client} ~/.cargo/bin/
 ```
 
 Requires Rust nightly for the driver; stable Rust suffices for cargo-warmup alone.
+The clang-daemon requires only a C++17 compiler (g++ or clang++).
 
 ## Contact
 

@@ -35,3 +35,22 @@ ANSWER_NECESSARY_ITEMS.md
 NECESSARY_ITEMS_DETECTION.md
 PERFORMANCE_PHASE5B_OPTIMIZATION.md
 PROJECT_SLICING_IMPLEMENTATION.md
+
+# Large binary files (jj snapshot limit)
+dist/
+test_symbol
+
+# PCH/GCC-slicer compiled artifacts
+*.pch.h
+*.gch
+a.out
+*.deb
+gcc-slicer/*.deb
+gcc-slicer/gcc_slicer_pch
+gcc-slicer/gcc_slicer_analyze.so
+gcc-slicer/gcc_slicer_stub.so
+gcc-slicer/gcc_slicer_bfs
+gcc-slicer/tests/hello/hello_stubbed
+clang-daemon/clang-daemon-client
+clang-daemon/clang-daemon-server
+tags

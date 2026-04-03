@@ -19,6 +19,10 @@ REPO="yijunyu/cargo-slicer"
 CARGO_SLICER_VERSION="0.0.8"
 INSTALL_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 
+# C/C++ daemon binaries: installed alongside Rust binaries for unified support
+# These are lightweight (~50 KB) and always built locally from clang-daemon/
+CLANG_DAEMON_BINARIES=(clang-daemon-server clang-daemon-client)
+
 # ── Detect platform ───────────────────────────────────────────────────
 
 ARCH="$(uname -m)"
@@ -329,6 +333,94 @@ elif [[ -f "$WARMUP_CACHE_MARKER" ]]; then
     echo "Registry dep cache already initialized (run 'cargo warmup status' to inspect)."
 fi
 
+# ── Install clang-daemon (C/C++ PCH acceleration) ─────────────────────
+# Small (~50 KB) server+client that injects PCH into any C/C++ build.
+# Built from source if a local checkout is available; skipped otherwise.
+# The server/client pair works with any compiler (clang, gcc) and any
+# build system (make, cmake, ninja) via CC=clang-daemon-client.
+
+_CLANG_DAEMON_INSTALLED=false
+_CLANG_DAEMON_SRC=""
+
+for _candidate in \
+    "$PWD/clang-daemon" \
+    "${_SRC_DIR:-}/clang-daemon" \
+    "$HOME/precc-c/clang-daemon" \
+    "$HOME/precc/clang-daemon"
+do
+    if [[ -f "$_candidate/Makefile" && -f "$_candidate/server.cc" ]]; then
+        _CLANG_DAEMON_SRC="$_candidate"
+        break
+    fi
+done
+
+if [[ -n "$_CLANG_DAEMON_SRC" ]]; then
+    echo ""
+    echo "Installing clang-daemon (C/C++ PCH accelerator)..."
+
+    # Prefer pre-built binaries in the source directory (avoids Makefile LLVM path issues)
+    _PREBUILT_OK=true
+    for _bin in clang-daemon-server clang-daemon-client; do
+        if [[ ! -f "$_CLANG_DAEMON_SRC/$_bin" || ! -x "$_CLANG_DAEMON_SRC/$_bin" ]]; then
+            _PREBUILT_OK=false; break
+        fi
+    done
+
+    if [[ "$_PREBUILT_OK" == "true" ]]; then
+        echo "  Using pre-built binaries from $_CLANG_DAEMON_SRC"
+        for _bin in clang-daemon-server clang-daemon-client; do
+            cp "$_CLANG_DAEMON_SRC/$_bin" "$INSTALL_DIR/$_bin"
+            chmod +x "$INSTALL_DIR/$_bin"
+            echo "  Installed: $INSTALL_DIR/$_bin"
+            _CLANG_DAEMON_INSTALLED=true
+        done
+    else
+        # Try to build from source (requires C++17 compiler; Makefile may need LLVM path)
+        echo "  Pre-built binaries not found; attempting source build..."
+        if make -C "$_CLANG_DAEMON_SRC" clang-daemon-client \
+             CXX="${CXX:-g++}" CXXFLAGS="-std=c++17 -O2" LDFLAGS="" \
+             -j"$(nproc 2>/dev/null || echo 4)" 2>&1 | tail -3 && \
+           make -C "$_CLANG_DAEMON_SRC" clang-daemon-server \
+             -j"$(nproc 2>/dev/null || echo 4)" 2>&1 | tail -3; then
+            for _bin in clang-daemon-server clang-daemon-client; do
+                if [[ -f "$_CLANG_DAEMON_SRC/$_bin" ]]; then
+                    cp "$_CLANG_DAEMON_SRC/$_bin" "$INSTALL_DIR/$_bin"
+                    chmod +x "$INSTALL_DIR/$_bin"
+                    echo "  Installed: $INSTALL_DIR/$_bin"
+                    _CLANG_DAEMON_INSTALLED=true
+                fi
+            done
+        else
+            echo "  Warning: clang-daemon build failed (LLVM dev headers required)"
+            echo "  C/C++ acceleration will be unavailable — Rust acceleration unaffected."
+            echo "  To build manually: make -C $_CLANG_DAEMON_SRC (set LLVM_DIR if needed)"
+        fi
+    fi
+else
+    echo ""
+    echo "Note: clang-daemon source not found — C/C++ PCH acceleration not installed."
+    echo "  (Rust projects still get full acceleration; C/C++ support is optional)"
+fi
+
+# Install build-accelerate.sh (unified launcher for Rust + C/C++)
+_BA_SH=""
+for _candidate in \
+    "$PWD/build-accelerate.sh" \
+    "${_SRC_DIR:-}/build-accelerate.sh" \
+    "$HOME/precc-c/build-accelerate.sh" \
+    "$HOME/precc/build-accelerate.sh"
+do
+    if [[ -f "$_candidate" ]]; then
+        _BA_SH="$_candidate"; break
+    fi
+done
+
+if [[ -n "$_BA_SH" ]]; then
+    cp "$_BA_SH" "$INSTALL_DIR/build-accelerate.sh"
+    chmod +x "$INSTALL_DIR/build-accelerate.sh"
+    echo "  Installed: $INSTALL_DIR/build-accelerate.sh"
+fi
+
 # ── Verify PATH ───────────────────────────────────────────────────────
 
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$(dirname "$INSTALL_DIR/cargo-slicer")"; then
@@ -345,17 +437,29 @@ echo "============================================"
 echo "  cargo-slicer + cargo-warmup installed!"
 echo "============================================"
 echo ""
-echo "Quick start — accelerate any Rust project (both tools combined):"
+echo "Quick start — accelerate ANY project (Rust or C/C++):"
 echo ""
-echo "  cargo-slicer.sh /path/to/your/project"
+echo "  build-accelerate.sh /path/to/your/project   # auto-detects project type"
 echo ""
-echo "What happens (4 steps, fully automatic):"
+echo "  Or use the dedicated scripts:"
+echo "    cargo-slicer.sh /path/to/rust/project      # Rust only"
+echo "    # For C/C++: CC=clang-daemon-client make -j\$(nproc)"
+echo ""
+echo "Rust project (4 steps, fully automatic):"
 echo "  1. cargo-warmup serves pre-compiled .rlib/.so for serde/syn/tokio/..."
 echo "     (registry deps — up to 15.9× on cold builds, 1.1–1.7× incremental)"
 echo "  2. cargo-slicer pre-analyzes the cross-crate call graph"
 echo "  3. cargo warmup pch-plan computes critical-path build order"
 echo "  4. cargo-slicer stubs unreachable functions via MIR"
 echo "     (dead code elimination — 10–42% codegen time saved)"
+echo ""
+if [[ "$_CLANG_DAEMON_INSTALLED" == "true" ]]; then
+echo "C/C++ project (clang-daemon PCH injection):"
+echo "  1. build-accelerate.sh auto-detects fat header from compile_commands.json"
+echo "  2. Starts clang-daemon-server (compiles PCH once, injects in parallel builds)"
+echo "  3. Builds with CC=clang-daemon-client (transparent drop-in, fallback on error)"
+echo "  Expected speedup: 1.2–2× for kernel/LLVM builds (-j48)"
+fi
 echo ""
 if [[ "${ZFLAG_AVAILABLE:-false}" == "true" ]]; then
     echo "Advanced — with patched nightly (-Z dead-fn-elimination):"
@@ -494,21 +598,31 @@ XSLICER
     echo ""
 fi
 
-# ── Auto-run if Cargo.toml exists in the calling directory ────────────
+# ── Auto-run if a buildable project exists in the calling directory ───
+# When piped through bash (curl | bash), PWD is the directory where curl was run.
+# Use build-accelerate.sh which handles both Rust and C/C++ projects.
 
-# When piped through bash (curl | bash), PWD is the directory where curl was run
+_PROJECT_DETECTED=false
 if [[ -f "$CALLER_DIR/Cargo.toml" && ! -f "$CALLER_DIR/x.py" ]]; then
-    SLICER_SH=""
+    _PROJECT_DETECTED=true
+elif [[ -f "$CALLER_DIR/compile_commands.json" ]] || \
+     [[ -f "$CALLER_DIR/CMakeLists.txt" ]] || \
+     [[ -f "$CALLER_DIR/Makefile" ]]; then
+    _PROJECT_DETECTED=true
+fi
+
+if [[ "$_PROJECT_DETECTED" == "true" ]]; then
+    BA_SH=""
     for _dir in $(echo "$PATH:$INSTALL_DIR" | tr ':' ' '); do
-        if [[ -f "$_dir/cargo-slicer.sh" && -x "$_dir/cargo-slicer.sh" ]]; then
-            SLICER_SH="$_dir/cargo-slicer.sh"
+        if [[ -f "$_dir/build-accelerate.sh" && -x "$_dir/build-accelerate.sh" ]]; then
+            BA_SH="$_dir/build-accelerate.sh"
             break
         fi
     done
-    if [[ -n "$SLICER_SH" ]]; then
+    if [[ -n "$BA_SH" ]]; then
         echo ""
-        echo "Found Cargo.toml in $CALLER_DIR — running cargo-slicer.sh..."
+        echo "Found project in $CALLER_DIR — running build-accelerate.sh..."
         echo ""
-        exec "$SLICER_SH" "$CALLER_DIR"
+        exec "$BA_SH" "$CALLER_DIR"
     fi
 fi
