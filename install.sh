@@ -196,19 +196,11 @@ elif command -v cargo &>/dev/null; then
     echo "This is a one-time step per nightly toolchain update."
     echo ""
 
-    # Get the source: use a local checkout if available, otherwise fetch from GitHub
+    # Clone source from GitHub (driver links librustc_driver.so so must be built from source)
+    _CLONE_DIR="$(mktemp -d)"
     _SRC_DIR=""
-    # Check if we extracted a source archive from the release tarball
-    if [[ -d "$TMPDIR/src" ]]; then
-        _SRC_DIR="$TMPDIR"
-    fi
-
-    # Fall back: clone the source repo
-    if [[ -z "$_SRC_DIR" ]]; then
-        _CLONE_DIR="$(mktemp -d)"
-        if git clone --depth=1 "https://github.com/$REPO" "$_CLONE_DIR" 2>/dev/null; then
-            _SRC_DIR="$_CLONE_DIR"
-        fi
+    if git clone --depth=1 "https://github.com/$REPO" "$_CLONE_DIR" 2>&1 | tail -1; then
+        _SRC_DIR="$_CLONE_DIR"
     fi
 
     if [[ -n "$_SRC_DIR" && -f "$_SRC_DIR/Cargo.toml" ]]; then
