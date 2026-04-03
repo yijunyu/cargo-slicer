@@ -128,8 +128,40 @@ fi
 if [[ "$IS_MIXED" == "true" ]]; then
     echo "=== build-accelerate: Mixed Rust+C/C++ project detected ==="
     echo "    Project: $PROJECT_DIR"
-    echo "    Strategy: clang-daemon (PCH) for C/C++ in build.rs + cargo-slicer for Rust"
+
+    # Estimate C/C++ LOC to decide if daemon overhead is worth it
+    # Daemon startup + PCH costs ~8s; only worthwhile if C/C++ build > ~20s
+    # Proxy: >150K LOC in non-test C/C++ sources (excludes tests/, bench/, examples/)
+    _CC_LOC=0
+    while IFS= read -r _f; do
+        _CC_LOC=$(( _CC_LOC + $(wc -l < "$_f" 2>/dev/null || echo 0) ))
+    done < <(/usr/bin/find "$PROJECT_DIR" -maxdepth 6 \
+        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" \) \
+        ! -path "*/target/*" ! -path "*/test*" ! -path "*/bench*" \
+        ! -path "*/example*" ! -path "*/doc*" 2>/dev/null | head -500)
+    echo "    C/C++ LOC estimate (non-test): $_CC_LOC"
+
+    _CC_LOC_MIN="${BUILD_ACCELERATE_MIN_CC_LOC:-150000}"
+    if [[ $_CC_LOC -lt $_CC_LOC_MIN ]]; then
+        echo "    C/C++ component too small ($_CC_LOC LOC < $_CC_LOC_MIN threshold)"
+        echo "    Falling back to pure Rust acceleration (cargo-slicer only)"
+        IS_MIXED=false
+    else
+        echo "    Strategy: clang-daemon (PCH) for C/C++ in build.rs + cargo-slicer for Rust"
+    fi
     echo ""
+
+    # If LOC check flipped IS_MIXED to false, fall through to pure Rust path below
+    if [[ "$IS_MIXED" == "false" ]]; then
+        SLICER_SH=""
+        for _dir in $(echo "${PATH:-}" | tr ':' ' ') "${CARGO_HOME:-$HOME/.cargo}/bin" "$(dirname "$0")"; do
+            if [[ -f "$_dir/cargo-slicer.sh" && -x "$_dir/cargo-slicer.sh" ]]; then
+                SLICER_SH="$_dir/cargo-slicer.sh"; break
+            fi
+        done
+        [[ -z "$SLICER_SH" ]] && { echo "Error: cargo-slicer.sh not found." >&2; exit 1; }
+        exec "$SLICER_SH" "$PROJECT_DIR" "${EXTRA_ARGS[@]}"
+    fi
 
     # Locate binaries
     DAEMON_SERVER="$(_find_bin clang-daemon-server)"
