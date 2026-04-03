@@ -58,21 +58,51 @@ if [[ "$IS_RUST" == "false" && "$IS_C" == "false" ]]; then
     exit 1
 fi
 
-# If both exist (e.g. a Rust project with C build system), prefer Rust
-if [[ "$IS_RUST" == "true" ]]; then
+# ── Detect mixed Rust+C project (build.rs compiles C/C++ via cc/cmake crate) ──
+IS_MIXED=false
+if [[ "$IS_RUST" == "true" && "$IS_C" == "true" ]]; then
+    IS_MIXED=true
+fi
+# Also detect: Rust project whose build.rs uses cc/cmake crate (no top-level Makefile needed)
+if [[ "$IS_RUST" == "true" && "$IS_MIXED" == "false" ]]; then
+    for _brs in "$PROJECT_DIR/build.rs" "$PROJECT_DIR"/*/build.rs; do
+        if [[ -f "$_brs" ]] && grep -qE '"cc"|"cmake"|"cmake-rs"|extern_c|cc::Build|cmake::Config' "$_brs" 2>/dev/null; then
+            IS_MIXED=true
+            break
+        fi
+    done
+fi
+
+# Pure Rust if not mixed
+if [[ "$IS_RUST" == "true" && "$IS_MIXED" == "false" ]]; then
     IS_C=false
 fi
 
+# ── Shared helper: locate a binary ──────────────────────────────────────────
+_find_bin() {
+    local name="$1"
+    for d in \
+        "$(dirname "$0")" \
+        "${CARGO_HOME:-$HOME/.cargo}/bin" \
+        "$HOME/.local/bin" \
+        /usr/local/bin \
+        /usr/bin; do
+        if [[ -f "$d/$name" && -x "$d/$name" ]]; then
+            echo "$d/$name"; return 0
+        fi
+    done
+    command -v "$name" 2>/dev/null || true
+}
+
 # ────────────────────────────────────────────────────────────────────────────
-# ── RUST PATH ────────────────────────────────────────────────────────────────
+# ── RUST PATH (pure) ─────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────
 
-if [[ "$IS_RUST" == "true" ]]; then
+if [[ "$IS_RUST" == "true" && "$IS_MIXED" == "false" ]]; then
     echo "=== build-accelerate: Rust project detected ==="
     echo "    Project: $PROJECT_DIR"
     echo ""
 
-    # Delegate entirely to cargo-slicer.sh (already handles all 4 steps)
     SLICER_SH=""
     for _dir in $(echo "${PATH:-}" | tr ':' ' ') "${CARGO_HOME:-$HOME/.cargo}/bin" "$(dirname "$0")"; do
         if [[ -f "$_dir/cargo-slicer.sh" && -x "$_dir/cargo-slicer.sh" ]]; then
@@ -91,6 +121,147 @@ if [[ "$IS_RUST" == "true" ]]; then
 fi
 
 # ────────────────────────────────────────────────────────────────────────────
+# ── MIXED PATH (Rust + C/C++ via build.rs) ───────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+
+if [[ "$IS_MIXED" == "true" ]]; then
+    echo "=== build-accelerate: Mixed Rust+C/C++ project detected ==="
+    echo "    Project: $PROJECT_DIR"
+    echo "    Strategy: clang-daemon (PCH) for C/C++ in build.rs + cargo-slicer for Rust"
+    echo ""
+
+    # Locate binaries
+    DAEMON_SERVER="$(_find_bin clang-daemon-server)"
+    DAEMON_CLIENT="$(_find_bin clang-daemon-client)"
+    SLICER_SH=""
+    for _dir in $(echo "${PATH:-}" | tr ':' ' ') "${CARGO_HOME:-$HOME/.cargo}/bin" "$(dirname "$0")"; do
+        if [[ -f "$_dir/cargo-slicer.sh" && -x "$_dir/cargo-slicer.sh" ]]; then
+            SLICER_SH="$_dir/cargo-slicer.sh"
+            break
+        fi
+    done
+
+    if [[ -z "$DAEMON_SERVER" || -z "$DAEMON_CLIENT" ]]; then
+        echo "Warning: clang-daemon not found — C/C++ build.rs will use plain clang." >&2
+        DAEMON_CLIENT=""
+    fi
+    if [[ -z "$SLICER_SH" ]]; then
+        echo "Error: cargo-slicer.sh not found in PATH." >&2
+        exit 1
+    fi
+
+    # Detect C++ compiler
+    CLANG_BIN=""
+    for _c in clang++ clang++-21 clang++-20 clang++-19 clang++-18 clang++-17 g++; do
+        if command -v "$_c" &>/dev/null; then
+            CLANG_BIN="$(command -v "$_c")"; break
+        fi
+    done
+
+    if [[ -n "$DAEMON_CLIENT" && -n "$CLANG_BIN" ]]; then
+        # ── Auto-detect fat header from build.rs C++ sources ─────────────────
+        echo "=== Step 1/3: Auto-detecting fat header for C/C++ components ==="
+
+        FAT_HDR="${CLANG_DAEMON_FAT_HDR:-}"
+        if [[ -z "$FAT_HDR" ]]; then
+            # Look for C/C++ sources referenced in the project (vendor/, src/, third-party/)
+            _SAMPLE_DIRS=()
+            for _d in "$PROJECT_DIR/vendor" "$PROJECT_DIR/third-party" \
+                      "$PROJECT_DIR/src" "$PROJECT_DIR/csrc" "$PROJECT_DIR/cpp"; do
+                [[ -d "$_d" ]] && _SAMPLE_DIRS+=("$_d")
+            done
+            [[ ${#_SAMPLE_DIRS[@]} -eq 0 ]] && _SAMPLE_DIRS=("$PROJECT_DIR")
+
+            if command -v python3 &>/dev/null; then
+                FAT_HDR="$(python3 - "${_SAMPLE_DIRS[@]}" <<'PYEOF'
+import sys, os, re
+from collections import Counter
+dirs = sys.argv[1:]
+include_re = re.compile(r'^\s*#include\s*[<"](.*?)[>"]', re.MULTILINE)
+counts = Counter()
+sampled = 0
+for d in dirs:
+    for root, _, files in os.walk(d):
+        for fn in files:
+            if not fn.endswith(('.c', '.cc', '.cpp', '.cxx', '.h', '.hpp')):
+                continue
+            try:
+                content = open(os.path.join(root, fn), errors='ignore').read()
+                for m in include_re.finditer(content):
+                    h = m.group(1)
+                    if not h.endswith(('.inc', '.def')):
+                        counts[h] += 1
+                sampled += 1
+            except OSError:
+                pass
+            if sampled >= 300:
+                break
+        if sampled >= 300:
+            break
+top = [h for h, _ in counts.most_common(5)]
+print('\n'.join(f'#include <{h}>' for h in top))
+PYEOF
+)" 2>/dev/null || FAT_HDR=""
+            fi
+
+            # Fallbacks
+            if [[ -z "$FAT_HDR" ]]; then
+                FAT_HDR='#include <string>
+#include <vector>
+#include <memory>
+#include <functional>
+#include <algorithm>
+'
+                echo "    Heuristic: generic C++ stdlib fat header"
+            else
+                echo "    Fat header from source scan:"
+            fi
+        fi
+
+        export CLANG_DAEMON_FAT_HDR="$FAT_HDR"
+        echo "$FAT_HDR" | sed 's/^/      /'
+
+        # ── Start daemon ─────────────────────────────────────────────────────
+        SOCKET="${CLANG_DAEMON_SOCKET:-/tmp/build-accelerate-$(basename "$PROJECT_DIR").sock}"
+        echo ""
+        echo "=== Step 2/3: Starting clang-daemon for build.rs C/C++ compilation ==="
+        echo "    Socket: $SOCKET"
+
+        pkill -f "clang-daemon-server.*$SOCKET" 2>/dev/null || true
+        sleep 0.2
+        rm -f "$SOCKET"
+
+        "$DAEMON_SERVER" --daemon --socket "$SOCKET" \
+            2>/dev/null &
+        DAEMON_PID=$!
+        trap 'kill $DAEMON_PID 2>/dev/null || true; rm -f "$SOCKET"' EXIT
+
+        for _i in $(seq 1 30); do
+            [[ -S "$SOCKET" ]] && break
+            sleep 0.2
+        done
+
+        export CLANG_DAEMON_SOCKET="$SOCKET"
+        export CLANG_DAEMON_CLANG="$CLANG_BIN"
+
+        # Expose daemon client as CC/CXX so build.rs (cc crate) uses it
+        export CC="$DAEMON_CLIENT"
+        export CXX="$DAEMON_CLIENT"
+        # cmake crate reads CMAKE_C_COMPILER / CMAKE_CXX_COMPILER from env
+        export CMAKE_C_COMPILER="$DAEMON_CLIENT"
+        export CMAKE_CXX_COMPILER="$DAEMON_CLIENT"
+
+        echo "    CC/CXX → $DAEMON_CLIENT (clang-daemon, PCH-accelerated)"
+    else
+        echo "    (clang-daemon unavailable — C/C++ build.rs will use default compiler)"
+    fi
+
+    echo ""
+    echo "=== Step 3/3: Building with cargo-slicer (Rust) + clang-daemon (C/C++) ==="
+    exec "$SLICER_SH" "$PROJECT_DIR" "${EXTRA_ARGS[@]}"
+fi
+
+# ────────────────────────────────────────────────────────────────────────────
 # ── C/C++ PATH ───────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -98,23 +269,7 @@ echo "=== build-accelerate: C/C++ project detected ==="
 echo "    Project: $PROJECT_DIR"
 echo ""
 
-# ── Locate binaries ─────────────────────────────────────────────────────────
-
-_find_bin() {
-    local name="$1"
-    for d in \
-        "$(dirname "$0")" \
-        "${CARGO_HOME:-$HOME/.cargo}/bin" \
-        "$HOME/.local/bin" \
-        /usr/local/bin \
-        /usr/bin; do
-        if [[ -f "$d/$name" && -x "$d/$name" ]]; then
-            echo "$d/$name"; return 0
-        fi
-    done
-    # Search PATH
-    command -v "$name" 2>/dev/null || true
-}
+# ── Locate binaries (already defined above, reuse _find_bin) ────────────────
 
 DAEMON_SERVER="$(_find_bin clang-daemon-server)"
 DAEMON_CLIENT="$(_find_bin clang-daemon-client)"
