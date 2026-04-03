@@ -53,13 +53,14 @@ No config files, no source changes, no build system edits.
 
 ## Results
 
-### Rust — warm incremental builds (typical developer workflow)
+### Rust — clean rebuild with warm registry (typical developer workflow)
 
-Baseline is `cargo +nightly build --release` with no wrapper. "With cargo-slicer" applies
-all three optimizations: registry cache + virtual slicing + critical-path scheduling.
+Baseline: `cargo clean && cargo +nightly build --release` with the cargo-warmup registry
+cache already populated (registry deps pre-compiled). "With cargo-slicer" adds virtual
+slicing + critical-path scheduling on top of the warm registry cache.
 
-| Project | Baseline | With cargo-slicer | Speedup |
-|---------|----------|-------------------|---------|
+| Project | Baseline (warm registry) | With cargo-slicer | Speedup |
+|---------|--------------------------|-------------------|---------|
 | **zed** (500K LOC) | 1,025s | 744s | **1.38×** |
 | **rustc-perf** suite | 145s | 123s | **1.18×** |
 | **cargo-slicer** itself | 143s | 82s | **1.74×** |
@@ -68,17 +69,22 @@ all three optimizations: registry cache + virtual slicing + critical-path schedu
 
 ### Rust — cold builds (CI / first clone, cargo-warmup alone)
 
-A cold build starts with an empty `~/.cargo/registry` cache — every dependency must be
-downloaded and compiled from scratch. cargo-warmup pre-compiles the most popular registry
-crates once; subsequent cold clones of any project skip recompiling them.
-zeroclaw is a small project (~30 crates), so its cold baseline is large relative to its warm
-incremental time; the 98s figure reflects only the deps not already in the warmup cache.
+Both columns use the warmup wrapper; "1st run" has an empty cache (all registry deps compile
+from source), "2nd run" serves them from cache. Speedup = 1st ÷ 2nd run wall time.
 
-| Project | Baseline (cold) | With cargo-warmup | Speedup |
-|---------|-----------------|-------------------|---------|
+Projects with many registry deps relative to local crates benefit most. Zed has 232 local
+crates that cannot be pre-compiled (including a WebRTC C++ build script), so warmup only
+helps its registry portion — hence a modest 1.4× vs 15.9× for zeroclaw.
+
+| Project | 1st run (cache empty) | 2nd run (cache warm) | Speedup |
+|---------|-----------------------|----------------------|---------|
 | **zeroclaw** | 1,561s | 98s | **15.9×** |
 | **nushell** | 597s | 117s | **5.1×** |
 | **zed** | 505s | 355s | **1.4×** |
+
+These baselines (505s–1,561s) are not directly comparable to the clean-rebuild baselines
+above (78s–1,025s): the warmup benchmarks ran at an earlier toolchain snapshot on a
+different machine configuration.
 
 ### C/C++ — parallel builds (clang-daemon + PCH, -j48)
 
