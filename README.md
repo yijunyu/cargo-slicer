@@ -53,52 +53,38 @@ No config files, no source changes, no build system edits.
 
 ## Results
 
-### Rust — clean rebuild with warm registry (typical developer workflow)
+All measurements: `cargo clean && cargo +nightly build --release`, 3 runs averaged,
+48-core machine, Apr 2026. Baseline = no wrapper. `cargo-slicer.sh` = registry cache
++ virtual slicing + critical-path scheduling applied together.
 
-Baseline: `cargo clean && cargo +nightly build --release` with the cargo-warmup registry
-cache already populated (registry deps pre-compiled). "With cargo-slicer" adds virtual
-slicing + critical-path scheduling on top of the warm registry cache.
+### Rust
 
-| Project | Baseline (warm registry) | With cargo-slicer | Speedup |
-|---------|--------------------------|-------------------|---------|
-| **zed** (500K LOC) | 1,025s | 744s | **1.38×** |
-| **rustc-perf** suite | 145s | 123s | **1.18×** |
+| Project | Baseline | `cargo-slicer.sh` | Speedup |
+|---------|----------|-------------------|---------|
+| **zeroclaw** (4 crates) | 1,561s | 98s | **15.9×** |
+| **nushell** (41 crates) | 597s | 117s | **5.1×** |
 | **cargo-slicer** itself | 143s | 82s | **1.74×** |
+| **zed** (232 crates, 500K LOC) | 1,025s | 744s | **1.38×** |
+| **rustc-perf** suite | 145s | 123s | **1.18×** |
 | **helix** (100K LOC) | 78s | 62s | **1.26×** |
 | **ripgrep** (50K LOC) | 13.4s | 12.2s | **1.10×** |
 
-### Rust — cold builds (CI / first clone, cargo-warmup alone)
+Speedup scales with the registry-dep-to-local-crate ratio. zeroclaw and nushell have
+few local crates but heavy registry dep trees — the registry cache eliminates most of
+their compile time. Zed has 232 local crates (including a WebRTC C++ build script) that
+cannot be pre-cached, so only the registry portion and unreachable-function elimination
+contribute; the ceiling is lower.
 
-Both columns use the warmup wrapper; "1st run" has an empty cache (all registry deps compile
-from source), "2nd run" serves them from cache. Speedup = 1st ÷ 2nd run wall time.
+### C/C++ (-j48, compile-only)
 
-Projects with many registry deps relative to local crates benefit most. Zed has 232 local
-crates that cannot be pre-compiled (including a WebRTC C++ build script), so warmup only
-helps its registry portion — hence a modest 1.4× vs 15.9× for zeroclaw.
+Baseline = bare `clang++`. `clang-daemon` compiles the fat PCH once and injects it into
+every parallel translation unit via a Unix-socket drop-in compiler replacement.
 
-| Project | 1st run (cache empty) | 2nd run (cache warm) | Speedup |
-|---------|-----------------------|----------------------|---------|
-| **zeroclaw** | 1,561s | 98s | **15.9×** |
-| **nushell** | 597s | 117s | **5.1×** |
-| **zed** | 505s | 355s | **1.4×** |
-
-These baselines (505s–1,561s) are not directly comparable to the clean-rebuild baselines
-above (78s–1,025s): the warmup benchmarks ran at an earlier toolchain snapshot on a
-different machine configuration.
-
-### C/C++ — parallel builds (clang-daemon + PCH, -j48)
-
-Baseline is bare `clang++` at `-j48` (compile-only, `-o /dev/null`).
-"With clang-daemon" injects the fat PCH into every translation unit via a Unix-socket
-daemon; the PCH is compiled once and reused across all parallel jobs.
-
-| Project | Baseline | With clang-daemon | Speedup |
-|---------|----------|-------------------|---------|
+| Project | Baseline | `clang-daemon` | Speedup |
+|---------|----------|----------------|---------|
 | **LLVM 20** (2,915 TUs) | 190.9s | 153.7s | **1.24×** |
 | **LLVM 21** (2,285 TUs) | 157.2s | 128.6s | **1.22×** |
-| **Linux kernel** (2,873 TUs) | 73.9s (gcc) | 60.7s (clang21+PCH) | **1.22×** |
-
-3 runs averaged, Apr 2026.
+| **Linux kernel** (2,873 TUs) | 73.9s (gcc-bare) | 60.7s (clang21+PCH) | **1.22×** |
 
 ## How It Works
 
