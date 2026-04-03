@@ -55,6 +55,9 @@ No config files, no source changes, no build system edits.
 
 ### Rust — warm incremental builds (typical developer workflow)
 
+Baseline is `cargo +nightly build --release` with no wrapper. "With cargo-slicer" applies
+all three optimizations: registry cache + virtual slicing + critical-path scheduling.
+
 | Project | Baseline | With cargo-slicer | Speedup |
 |---------|----------|-------------------|---------|
 | **zed** (500K LOC) | 1,025s | 744s | **1.38×** |
@@ -65,6 +68,12 @@ No config files, no source changes, no build system edits.
 
 ### Rust — cold builds (CI / first clone, cargo-warmup alone)
 
+A cold build starts with an empty `~/.cargo/registry` cache — every dependency must be
+downloaded and compiled from scratch. cargo-warmup pre-compiles the most popular registry
+crates once; subsequent cold clones of any project skip recompiling them.
+zeroclaw is a small project (~30 crates), so its cold baseline is large relative to its warm
+incremental time; the 98s figure reflects only the deps not already in the warmup cache.
+
 | Project | Baseline (cold) | With cargo-warmup | Speedup |
 |---------|-----------------|-------------------|---------|
 | **zeroclaw** | 1,561s | 98s | **15.9×** |
@@ -73,12 +82,17 @@ No config files, no source changes, no build system edits.
 
 ### C/C++ — parallel builds (clang-daemon + PCH, -j48)
 
+Baseline is bare `clang++` at `-j48` (compile-only, `-o /dev/null`).
+"With clang-daemon" injects the fat PCH into every translation unit via a Unix-socket
+daemon; the PCH is compiled once and reused across all parallel jobs.
+
 | Project | Baseline | With clang-daemon | Speedup |
 |---------|----------|-------------------|---------|
-| **LLVM 21** (6,400 TUs) | — | — | **1.22×** |
-| **Linux kernel** (26K TUs) | — | — | **up to 1.3× on large TUs** |
+| **LLVM 20** (2,915 TUs) | 190.9s | 153.7s | **1.24×** |
+| **LLVM 21** (2,285 TUs) | 157.2s | 128.6s | **1.22×** |
+| **Linux kernel** (2,873 TUs) | 73.9s (gcc) | 60.7s (clang21+PCH) | **1.22×** |
 
-3 runs averaged, nightly toolchain (Apr 2026).
+3 runs averaged, Apr 2026.
 
 ## How It Works
 
