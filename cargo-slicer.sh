@@ -266,6 +266,9 @@ echo "Project:  $PROJECT_DIR"
 echo "Binary:   $(find "$PROJECT_DIR/target/release" -maxdepth 1 -type f -executable 2>/dev/null | head -5)"
 
 if [[ -f "$PROJECT_DIR/.cargo-slicer-debug.log" ]]; then
-    STUBBED=$(grep -c '^\[codegen-filter\] STUB:' "$PROJECT_DIR/.cargo-slicer-debug.log" 2>/dev/null || echo 0)
-    echo "Stubbed:  $STUBBED functions"
+    # Sum all "defined-unmarked" counts across crate analyses in the debug log
+    STUBBED=$(grep 'defined-unmarked' "$PROJECT_DIR/.cargo-slicer-debug.log" 2>/dev/null \
+        | grep -oE '[0-9]+ defined-unmarked' | awk '{sum+=$1} END {print sum+0}')
+    if [[ -z "$STUBBED" ]]; then STUBBED=0; fi
+    echo "Stubbed:  $STUBBED functions (stubbed out of codegen)"
 fi
