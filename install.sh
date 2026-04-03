@@ -176,6 +176,70 @@ else
     ZFLAG_AVAILABLE=false
 fi
 
+# ── Build and install nightly driver (cargo-slicer-rustc) ────────────────
+# The driver links against librustc_driver.so, which is toolchain-specific,
+# so it cannot be pre-compiled into the release archive.
+# We build it from source here — takes ~2-3 min on first install.
+# Skipped automatically if already installed for the current nightly.
+
+DRIVER_BIN="$INSTALL_DIR/cargo-slicer-rustc"
+DRIVER_MARKER="${CARGO_HOME:-$HOME/.cargo}/warmup-cache/.driver-$(rustup run nightly rustc --version 2>/dev/null | md5sum | cut -c1-8)"
+
+if [[ "${ZFLAG_AVAILABLE:-false}" == "true" ]]; then
+    : # In-tree -Z flag: no driver needed
+elif [[ -f "$DRIVER_BIN" && -f "$DRIVER_MARKER" ]]; then
+    echo ""
+    echo "Nightly driver already installed for this toolchain."
+elif command -v cargo &>/dev/null; then
+    echo ""
+    echo "Building nightly driver (cargo-slicer-rustc) from source (~2-3 min)..."
+    echo "This is a one-time step per nightly toolchain update."
+    echo ""
+
+    # Get the source: use a local checkout if available, otherwise fetch from GitHub
+    _SRC_DIR=""
+    # Check if we extracted a source archive from the release tarball
+    if [[ -d "$TMPDIR/src" ]]; then
+        _SRC_DIR="$TMPDIR"
+    fi
+
+    # Fall back: clone the source repo
+    if [[ -z "$_SRC_DIR" ]]; then
+        _CLONE_DIR="$(mktemp -d)"
+        if git clone --depth=1 "https://github.com/$REPO" "$_CLONE_DIR" 2>/dev/null; then
+            _SRC_DIR="$_CLONE_DIR"
+        fi
+    fi
+
+    if [[ -n "$_SRC_DIR" && -f "$_SRC_DIR/Cargo.toml" ]]; then
+        # Add rustc-private component (needed to link librustc_driver)
+        rustup component add rustc-dev llvm-tools-preview --toolchain nightly 2>/dev/null || true
+
+        if cargo +nightly install --path "$_SRC_DIR" \
+            --profile release-rustc \
+            --bin cargo-slicer-rustc \
+            --bin cargo_slicer_dispatch \
+            --features rustc-driver \
+            --no-default-features \
+            --force 2>&1 | tail -5; then
+            touch "$DRIVER_MARKER" 2>/dev/null || true
+            echo "  Installed: $INSTALL_DIR/cargo-slicer-rustc"
+        else
+            echo "  Warning: driver build failed — virtual slicing will use pre-analysis only."
+            echo "  To retry: cargo +nightly install --path <cargo-slicer-src> \\"
+            echo "    --profile release-rustc --bin cargo-slicer-rustc --features rustc-driver"
+        fi
+        [[ -d "${_CLONE_DIR:-}" ]] && rm -rf "$_CLONE_DIR" || true
+    else
+        echo "  Warning: could not obtain source to build driver."
+        echo "  To install manually: cargo +nightly install --git https://github.com/$REPO \\"
+        echo "    --profile release-rustc --bin cargo-slicer-rustc --features rustc-driver"
+    fi
+else
+    echo ""
+    echo "Note: cargo not found — skipping nightly driver build."
+fi
+
 # ── Pre-warm registry dep cache (cargo-warmup) ───────────────────────
 # Run once per toolchain: compiles top-20 crates.io deps (serde, syn, tokio...)
 # into ~/.cargo/warmup-cache/ so cold builds of any project skip recompiling them.
