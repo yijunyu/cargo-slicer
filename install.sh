@@ -120,19 +120,42 @@ fi
 
 if [[ -f "$CANDIDATE" ]]; then
     chmod +x "$CANDIDATE"
-    if ! "$CANDIDATE" --help &>/dev/null; then
-        echo "" >&2
-        echo "Error: downloaded binary is not compatible with this system (likely glibc mismatch)." >&2
-        echo "Please file an issue at https://github.com/$REPO/issues" >&2
-        exit 1
+    if ! "$CANDIDATE" --help &>/dev/null 2>&1; then
+        echo ""
+        echo "Note: downloaded binary not compatible with this system (likely glibc mismatch)."
+        echo "      Will build stable binaries from source instead."
+        SKIP_BIN_INSTALL=1
     fi
 fi
 
-# ── Install binaries ──────────────────────────────────────────────────
+# If running from a local source checkout, build stable binaries from source
+_CALLER_IS_SOURCE=false
+if grep -q 'name.*=.*"cargo-slicer"' "$PWD/Cargo.toml" 2>/dev/null; then
+    _CALLER_IS_SOURCE=true
+fi
+
+_SOURCE_INSTALLED=false
+if [[ "${SKIP_BIN_INSTALL:-}" == "1" ]] && [[ "$_CALLER_IS_SOURCE" == "true" ]]; then
+    echo ""
+    echo "Building stable binaries from source (local checkout)..."
+    if cargo install --path "$PWD" --force \
+        --bin cargo-slicer --bin cargo_slicer_dispatch \
+        --bin cargo_warmup_dispatch --bin cargo_warmup_pch \
+        --bin cargo-warmup --bin cargo_warmup_pch \
+        --bin gcc_slicer_bfs --bin gcc_slicer_pch \
+        2>&1 | tail -5; then
+        _SOURCE_INSTALLED=true
+        echo "  Stable binaries installed from local source."
+    else
+        echo "  Warning: source build failed. Will try tarball binaries."
+    fi
+fi
+
+# ── Install binaries from tarball (unless already installed from source) ─
 
 mkdir -p "$INSTALL_DIR"
 
-if [[ -z "${SKIP_BIN_INSTALL:-}" ]]; then
+if [[ -z "${SKIP_BIN_INSTALL:-}" ]] && [[ "$_SOURCE_INSTALLED" != "true" ]]; then
     BINARIES=(cargo-slicer cargo_slicer_dispatch cargo_warmup_dispatch cargo_warmup_pch cargo-warmup cargo-slicer.sh)
     for bin in "${BINARIES[@]}"; do
         for search in "$TMPDIR/$bin" "$TMPDIR/cargo-slicer/$bin"; do
@@ -143,6 +166,16 @@ if [[ -z "${SKIP_BIN_INSTALL:-}" ]]; then
                 break
             fi
         done
+    done
+elif [[ "$_SOURCE_INSTALLED" == "true" ]]; then
+    # Still install cargo-slicer.sh from the tarball (it's a shell script, always compatible)
+    for search in "$TMPDIR/cargo-slicer.sh" "$TMPDIR/cargo-slicer/cargo-slicer.sh"; do
+        if [[ -f "$search" ]]; then
+            cp "$search" "$INSTALL_DIR/cargo-slicer.sh"
+            chmod +x "$INSTALL_DIR/cargo-slicer.sh"
+            echo "  Installed: $INSTALL_DIR/cargo-slicer.sh"
+            break
+        fi
     done
 fi
 
@@ -196,17 +229,35 @@ elif command -v cargo &>/dev/null; then
     echo "This is a one-time step per nightly toolchain update."
     echo ""
 
-    # Clone source from GitHub (driver links librustc_driver.so so must be built from source)
-    _CLONE_DIR="$(mktemp -d)"
+    # The public deploy repo (yijunyu/cargo-slicer) has no Cargo.toml — it's docs+scripts only.
+    # The full source lives in yijunyu/precc (private) or a local checkout.
+    # Strategy: prefer local checkout → git install from private repo → skip with hint.
+
+    FULL_SOURCE_REPO="yijunyu/precc"
+
+    # 1. Look for a local checkout: caller's dir, or common locations
     _SRC_DIR=""
-    if git clone --depth=1 "https://github.com/$REPO" "$_CLONE_DIR" 2>&1 | tail -1; then
-        _SRC_DIR="$_CLONE_DIR"
-    fi
+    for _candidate in \
+        "$PWD" \
+        "$HOME/precc-c" \
+        "$HOME/precc" \
+        "$(dirname "$(command -v cargo-slicer 2>/dev/null || echo /nonexistent)")/../../.."
+    do
+        _candidate="$(cd "$_candidate" 2>/dev/null && pwd || true)"
+        if [[ -n "$_candidate" && -f "$_candidate/Cargo.toml" ]] && \
+           grep -q 'cargo-slicer' "$_candidate/Cargo.toml" 2>/dev/null; then
+            _SRC_DIR="$_candidate"
+            echo "  Found local source checkout: $_SRC_DIR"
+            break
+        fi
+    done
 
-    if [[ -n "$_SRC_DIR" && -f "$_SRC_DIR/Cargo.toml" ]]; then
-        # Add rustc-private component (needed to link librustc_driver)
-        rustup component add rustc-dev llvm-tools-preview --toolchain nightly 2>/dev/null || true
+    # Add rustc-private component (needed to link librustc_driver)
+    rustup component add rustc-dev llvm-tools-preview --toolchain nightly 2>/dev/null || true
 
+    _BUILD_OK=false
+    if [[ -n "$_SRC_DIR" ]]; then
+        # Build from local checkout
         if cargo +nightly install --path "$_SRC_DIR" \
             --profile release-rustc \
             --bin cargo-slicer-rustc \
@@ -214,18 +265,32 @@ elif command -v cargo &>/dev/null; then
             --features rustc-driver \
             --no-default-features \
             --force 2>&1 | tail -5; then
-            touch "$DRIVER_MARKER" 2>/dev/null || true
-            echo "  Installed: $INSTALL_DIR/cargo-slicer-rustc"
-        else
-            echo "  Warning: driver build failed — virtual slicing will use pre-analysis only."
-            echo "  To retry: cargo +nightly install --path <cargo-slicer-src> \\"
-            echo "    --profile release-rustc --bin cargo-slicer-rustc --features rustc-driver"
+            _BUILD_OK=true
         fi
-        [[ -d "${_CLONE_DIR:-}" ]] && rm -rf "$_CLONE_DIR" || true
     else
-        echo "  Warning: could not obtain source to build driver."
-        echo "  To install manually: cargo +nightly install --git https://github.com/$REPO \\"
-        echo "    --profile release-rustc --bin cargo-slicer-rustc --features rustc-driver"
+        # Try installing directly from the full-source git repo (may require auth for private repo)
+        echo "  No local checkout found; trying: https://github.com/$FULL_SOURCE_REPO"
+        if cargo +nightly install \
+            --git "https://github.com/$FULL_SOURCE_REPO" \
+            --profile release-rustc \
+            --bin cargo-slicer-rustc \
+            --bin cargo_slicer_dispatch \
+            --features rustc-driver \
+            --no-default-features \
+            --force 2>&1 | tail -5; then
+            _BUILD_OK=true
+        fi
+    fi
+
+    if [[ "$_BUILD_OK" == "true" ]]; then
+        touch "$DRIVER_MARKER" 2>/dev/null || true
+        echo "  Installed: $INSTALL_DIR/cargo-slicer-rustc"
+    else
+        echo "  Warning: driver build failed — virtual slicing will use pre-analysis only."
+        echo "  To build manually from a local checkout:"
+        echo "    git clone https://github.com/$FULL_SOURCE_REPO /tmp/precc-src"
+        echo "    cargo +nightly install --path /tmp/precc-src \\"
+        echo "      --profile release-rustc --bin cargo-slicer-rustc --features rustc-driver"
     fi
 else
     echo ""
