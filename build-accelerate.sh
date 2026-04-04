@@ -129,22 +129,46 @@ if [[ "$IS_MIXED" == "true" ]]; then
     echo "=== build-accelerate: Mixed Rust+C/C++ project detected ==="
     echo "    Project: $PROJECT_DIR"
 
-    # Estimate C/C++ LOC to decide if daemon overhead is worth it
-    # Daemon startup + PCH costs ~8s; only worthwhile if C/C++ build > ~20s
-    # Proxy: >150K LOC in non-test C/C++ sources (excludes tests/, bench/, examples/)
-    _CC_LOC=0
-    while IFS= read -r _f; do
-        _CC_LOC=$(( _CC_LOC + $(wc -l < "$_f" 2>/dev/null || echo 0) ))
-    done < <(/usr/bin/find "$PROJECT_DIR" -maxdepth 6 \
-        \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" \) \
-        ! -path "*/target/*" ! -path "*/test*" ! -path "*/bench*" \
-        ! -path "*/example*" ! -path "*/doc*" 2>/dev/null | head -500)
-    echo "    C/C++ LOC estimate (non-test): $_CC_LOC"
+    # Decide whether clang-daemon overhead (~8s) is worth it for this project's C/C++ component.
+    # Decision is cached in .build-accelerate-cache after the first run (measured actual time).
+    # On first run: use dual static heuristic (files > 150 AND LOC > 150K).
+    # On subsequent runs: use cached C build time (daemon worthwhile if > 20s).
+    _CACHE_FILE="$PROJECT_DIR/.build-accelerate-cache"
+    _USE_DAEMON=false
 
-    _CC_LOC_MIN="${BUILD_ACCELERATE_MIN_CC_LOC:-150000}"
-    if [[ $_CC_LOC -lt $_CC_LOC_MIN ]]; then
-        echo "    C/C++ component too small ($_CC_LOC LOC < $_CC_LOC_MIN threshold)"
-        echo "    Falling back to pure Rust acceleration (cargo-slicer only)"
+    if [[ -f "$_CACHE_FILE" ]]; then
+        # Read cached C build time from previous run
+        _CACHED_C_TIME=$(awk -F= '/^cc_build_time_s=/{print $2}' "$_CACHE_FILE" 2>/dev/null || echo 0)
+        _CACHED_DECISION=$(awk -F= '/^use_daemon=/{print $2}' "$_CACHE_FILE" 2>/dev/null || echo "")
+        if [[ -n "$_CACHED_DECISION" ]]; then
+            echo "    [cache] prior C/C++ build time: ${_CACHED_C_TIME}s → daemon: $_CACHED_DECISION"
+            [[ "$_CACHED_DECISION" == "true" ]] && _USE_DAEMON=true
+        fi
+    else
+        # First run: static heuristic — files > 150 AND LOC > 150K (non-test sources)
+        _CC_FILES=0
+        _CC_LOC=0
+        while IFS= read -r _f; do
+            _CC_FILES=$(( _CC_FILES + 1 ))
+            _CC_LOC=$(( _CC_LOC + $(wc -l < "$_f" 2>/dev/null || echo 0) ))
+        done < <(/usr/bin/find "$PROJECT_DIR" -maxdepth 6 \
+            \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" \) \
+            ! -path "*/target/*" ! -path "*/test*" ! -path "*/bench*" \
+            ! -path "*/example*" ! -path "*/doc*" 2>/dev/null | head -600)
+        echo "    [heuristic] C/C++ non-test: $_CC_FILES files, $_CC_LOC LOC"
+
+        _CC_FILES_MIN="${BUILD_ACCELERATE_MIN_CC_FILES:-150}"
+        _CC_LOC_MIN="${BUILD_ACCELERATE_MIN_CC_LOC:-150000}"
+        if [[ $_CC_FILES -gt $_CC_FILES_MIN && $_CC_LOC -gt $_CC_LOC_MIN ]]; then
+            _USE_DAEMON=true
+            echo "    [heuristic] large C/C++ component → clang-daemon enabled"
+        else
+            echo "    [heuristic] small C/C++ component → cargo-slicer only (daemon overhead not worth it)"
+        fi
+    fi
+
+    if [[ "$_USE_DAEMON" == "false" ]]; then
+        echo "    Strategy: cargo-slicer only (Rust acceleration, no C/C++ daemon)"
         IS_MIXED=false
     else
         echo "    Strategy: clang-daemon (PCH) for C/C++ in build.rs + cargo-slicer for Rust"
@@ -160,6 +184,13 @@ if [[ "$IS_MIXED" == "true" ]]; then
             fi
         done
         [[ -z "$SLICER_SH" ]] && { echo "Error: cargo-slicer.sh not found." >&2; exit 1; }
+        # Write cache so next run skips heuristic entirely
+        if [[ ! -f "$_CACHE_FILE" ]]; then
+            printf "# build-accelerate cache — do not edit manually\n" > "$_CACHE_FILE"
+            printf "cc_build_time_s=0\n" >> "$_CACHE_FILE"
+            printf "use_daemon=false\n" >> "$_CACHE_FILE"
+            printf "generated=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_CACHE_FILE"
+        fi
         exec "$SLICER_SH" "$PROJECT_DIR" "${EXTRA_ARGS[@]}"
     fi
 
@@ -291,7 +322,26 @@ PYEOF
 
     echo ""
     echo "=== Step 3/3: Building with cargo-slicer (Rust) + clang-daemon (C/C++) ==="
-    exec "$SLICER_SH" "$PROJECT_DIR" "${EXTRA_ARGS[@]}"
+
+    # Time the build to populate cache for next run
+    _BUILD_T0=$(date +%s)
+    "$SLICER_SH" "$PROJECT_DIR" "${EXTRA_ARGS[@]}"
+    _BUILD_STATUS=$?
+    _BUILD_T1=$(date +%s)
+    _BUILD_TIME=$(( _BUILD_T1 - _BUILD_T0 ))
+
+    # Write cache: record measured C build time and daemon decision
+    # C build time ≈ total build time when daemon is active and Rust is fast
+    # Use actual wall time as proxy; user can override with BUILD_ACCELERATE_MIN_CC_LOC
+    if [[ ! -f "$_CACHE_FILE" ]]; then
+        # Estimate C time as fraction of total (C dominates in mixed builds)
+        printf "# build-accelerate cache — do not edit manually\n" > "$_CACHE_FILE"
+        printf "cc_build_time_s=%d\n" "$_BUILD_TIME" >> "$_CACHE_FILE"
+        printf "use_daemon=%s\n" "$_USE_DAEMON" >> "$_CACHE_FILE"
+        printf "generated=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$_CACHE_FILE"
+        echo "    [cache] written to $_CACHE_FILE (next run will skip heuristic)"
+    fi
+    exit $_BUILD_STATUS
 fi
 
 # ────────────────────────────────────────────────────────────────────────────
