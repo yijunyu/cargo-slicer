@@ -1,5 +1,24 @@
 # Getting Started
 
+## Docker (quickest start — no installation needed)
+
+Pull the pre-built image and run it against any Rust project:
+
+```bash
+docker run --rm --cpus=48 \
+  -v $(pwd):/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest
+```
+
+The image includes all binaries (`cargo-slicer-rustc`, `cargo_warmup_pch`, etc.) and a
+pre-warmed registry cache. `--cpus=48` ensures the container uses all available cores.
+Replace `48` with the output of `nproc` on your machine.
+
+> **First run**: the container runs `cargo-slicer pre-analyze` automatically if no
+> `.slicer-cache/` directory is found, then builds with the full 3-layer pipeline.
+
+---
+
 ## Install
 
 ```bash
