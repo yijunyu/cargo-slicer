@@ -97,6 +97,7 @@ jobs:
             --bin cargo-slicer \
             --bin cargo_slicer_dispatch \
             --bin cargo_warmup_dispatch \
+            --bin cargo_warmup_pch \
             --bin cargo-warmup \
             --root /tmp/cs-install
           mkdir -p dist
@@ -108,8 +109,9 @@ jobs:
           # Core slicer binaries
           cp /tmp/cs-install/bin/cargo-slicer "$STAGING/"
           cp /tmp/cs-install/bin/cargo_slicer_dispatch "$STAGING/"
-          # Warmup binaries (new)
+          # Warmup binaries
           cp /tmp/cs-install/bin/cargo_warmup_dispatch "$STAGING/"
+          cp /tmp/cs-install/bin/cargo_warmup_pch "$STAGING/"
           cp /tmp/cs-install/bin/cargo-warmup "$STAGING/"
           # Build script (chains both tools)
           cp cargo-slicer.sh "$STAGING/" 2>/dev/null || true
