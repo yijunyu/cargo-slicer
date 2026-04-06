@@ -54,3 +54,4 @@ gcc-slicer/tests/hello/hello_stubbed
 clang-daemon/clang-daemon-client
 clang-daemon/clang-daemon-server
 tags
+book/html
