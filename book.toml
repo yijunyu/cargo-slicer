@@ -1,0 +1,18 @@
+[book]
+title = "cargo-slicer"
+authors = ["Yijun Yu"]
+language = "en"
+src = "book/src"
+
+[build]
+build-dir = "book/html"
+
+[output.html]
+site-url = "/cargo-slicer/"
+git-repository-url = "https://github.com/yijunyu/cargo-slicer"
+edit-url-template = "https://github.com/yijunyu/cargo-slicer/edit/main/book/src/{path}"
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
