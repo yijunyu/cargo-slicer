@@ -44,6 +44,66 @@ machine.
 | rustc | 336 s | 176 s | **−48%, 2.7 min saved** |
 | ripgrep | 13 s | 13 s | break-even (all fns reachable) |
 
+## C/C++ projects — clang-daemon PCH acceleration
+
+`build-accelerate.sh` (included in the image) auto-detects C/C++ projects and
+injects a precompiled header via `clang-daemon`. The technique eliminates
+repeated header parsing across parallel compilation units.
+
+**Already benchmarked** (48-core server, Clang 21, `-j48`):
+
+| Project | Stars | Files | Baseline | Accelerated | Speedup | Notes |
+|---------|-------|-------|----------|-------------|---------|-------|
+| Linux kernel 6.14 | 227k | 26,339 | ~890 s | ~730 s | **1.22×** | GCC fallback for asm-heavy files |
+| LLVM 20 | — | ~2,873 | measured | measured | **1.22×** | Clang 21 compiling Clang 20 |
+| LLVM 21 | — | ~2,873 | measured | measured | **1.24×** | Self-hosted build |
+| vim | — | ~300 | baseline | accelerated | **1.3×** | Small project, overhead minimal |
+| sqlite3 | — | 1 (amalgam) | 20 s | 20.2 s | **1.01×** | Single-file; PCH gives nothing |
+
+**Predicted speedup for top starred projects** (based on file count × header density model):
+
+| Rank | Project | Stars | Lang | Files | LOC | Build | Predicted | Reason |
+|------|---------|-------|------|-------|-----|-------|-----------|--------|
+| 1 | [Linux](https://github.com/torvalds/linux) | 227k | C | 26,339 | ~20M | Make | **1.2×** ✅ benchmarked |
+| 2 | [TensorFlow](https://github.com/tensorflow/tensorflow) | 195k | C++ | ~650 | ~2.5M | Bazel/CMake | **1.15–1.25×** | Heavy STL + proto headers |
+| 3 | [Godot](https://github.com/godotengine/godot) | 109k | C++ | ~3,500 | ~8.6M | SCons | **1.2–1.3×** | Large header graph |
+| 4 | [Electron](https://github.com/electron/electron) | 121k | C++ | (Chromium) | ~25M | ninja | **1.2×** | Chromium-scale header reuse |
+| 5 | [OpenCV](https://github.com/opencv/opencv) | 87k | C++ | ~1,000 | ~600K | CMake | **1.15–1.2×** | Dense OpenCV headers |
+| 6 | [FFmpeg](https://github.com/FFmpeg/FFmpeg) | 58k | C | ~500 | ~1M | autotools | **1.1–1.2×** | libav* headers per file |
+| 7 | [Bitcoin](https://github.com/bitcoin/bitcoin) | 89k | C++ | ~500 | ~750K | CMake | **1.1–1.2×** | Boost + secp256k1 headers |
+| 8 | [Netdata](https://github.com/netdata/netdata) | 78k | C | ~700 | ~700K | CMake | **1.1–1.15×** | Moderate header depth |
+| 9 | [Redis](https://github.com/redis/redis) | 74k | C | ~250 | ~330K | Make | **1.05–1.1×** | Shallow headers, small codebase |
+| 10 | [Git](https://github.com/git/git) | 60k | C | ~400 | ~140K | Make | **1.05–1.1×** | Minimal headers |
+| — | [llama.cpp](https://github.com/ggml-org/llama.cpp) | 102k | C++ | ~150 | ~250K | CMake | **1.05×** | Small; GGML headers not dense |
+| — | [sqlite3](https://github.com/sqlite/sqlite) | — | C | 1 | ~255K | Make | **≈1×** | Amalgamation; no parallelism |
+
+**Key insight**: speedup scales with (files × header parse fraction). Projects with
+thousands of files each including the same heavyweight headers (Linux, Godot,
+TensorFlow, Chromium) get the most benefit. Single-file amalgamations (sqlite3)
+and projects with shallow headers (Redis, Git) get little to none.
+
+To run against any of these projects:
+
+```bash
+# Clone and accelerate (auto-detects C/C++ via compile_commands.json or Makefile)
+git clone https://github.com/torvalds/linux
+build-accelerate.sh ./linux
+
+# Or via Docker (mounts your checkout)
+docker run --rm --cpus=48 \
+  -v $(pwd)/linux:/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest
+```
+
+> For projects using SCons (Godot) or Bazel (TensorFlow), generate
+> `compile_commands.json` first:
+> ```bash
+> # Godot
+> scons compiledb
+> # TensorFlow (CMake path)
+> cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -B build && cp build/compile_commands.json .
+> ```
+
 ## Running benchmarks yourself
 
 ```bash
