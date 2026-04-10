@@ -2,6 +2,20 @@
 
 One command to accelerate any Rust or C/C++ build.
 
+## Docker (no installation needed)
+
+```bash
+cd /path/to/your/project
+docker run --rm --cpus=48 \
+  -v $(pwd):/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest
+```
+
+**Must run from inside your project directory.** `$(pwd)` mounts it into the container.
+Replace `48` with `$(nproc)` on your machine.
+
+---
+
 ## Install (30 seconds)
 
 ```bash
@@ -13,7 +27,8 @@ Installs to `~/.cargo/bin/`. Detects glibc compatibility and builds from source 
 ## Run
 
 ```bash
-build-accelerate.sh /path/to/your/project
+cd /path/to/your/project
+build-accelerate.sh .
 ```
 
 That's it. No config. No source changes. Auto-detects Rust or C/C++.
