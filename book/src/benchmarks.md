@@ -3,7 +3,12 @@
 All numbers are cold builds (after `cargo clean`) on a 48-core Linux server
 with nightly Rust.
 
-## Virtual slicer — rust-perf standard suite
+## Virtual slicer — rust-perf standard suite (not yet re-verified)
+
+These single-crate numbers were measured without `-Z threads=8` or the wild
+linker. They have **not been re-verified** with the current fair-RUSTFLAGS
+protocol and may overstate speedups (same apples-to-oranges issue as the
+retracted workspace numbers above).
 
 | Project | Baseline | cargo-slicer | Speedup |
 |---------|----------|-------------|---------|

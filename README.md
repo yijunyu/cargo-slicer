@@ -53,7 +53,7 @@ That's it. No config. No source changes. Auto-detects Rust or C/C++.
 === Step 3/4: Building with priority scheduling + registry cache + MIR stubs ===
     Compiling my-app v0.1.0
 
-real  1m22s   (baseline: 2m23s)   Speedup: 1.74×
+real  1m22s   (baseline: 1m48s)   Speedup: 1.31×
 Stubbed: 217 functions
 ```
 
