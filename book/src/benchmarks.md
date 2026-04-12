@@ -55,13 +55,21 @@ container overhead, but `build-slicer` compensates via the warm registry
 cache (pre-compiled `.rlib` files for registry deps). The extra ~14% boost
 over the host-native 1.31× comes from this cache layer.
 
-## Warm-cache daemon — rust-perf suite
+## Warm-cache daemon — verified (Apr 2026)
+
+Both baseline and warmed use nightly + `-Z threads=8`. Interleaved rounds,
+dispatch pre-warmed, `rm -rf target/` before each run.
 
 | Crate | Baseline | Warmed | Speedup |
 |-------|----------|--------|---------|
-| image 0.25.6 | 40,742 ms | 4,800 ms | **8.5×** |
-| cargo 0.87.1 | 133,797 ms | 58,000 ms | **2.3×** |
-| syn 2.0.101 | 6,711 ms | 4,040 ms | **1.66×** |
+| image 0.25 | 4.9 s | 2.1 s | **2.3×** |
+| syn 2.0 | 1.0 s | 0.66 s | **1.5×** |
+
+> An earlier version of this table claimed **8.5×** for image (40.7 s →
+> 4.8 s) and **1.7×** for syn (6.7 s → 4.0 s). Those baselines were
+> measured without `-Z threads=8` and the wild linker, while the warmed
+> runs had them — the same apples-to-oranges error as the nushell 5.1×.
+> cargo 0.87.1 (claimed 2.3×) has not yet been re-verified.
 
 A warm cache populated by one project is reused across all projects on the same
 machine.

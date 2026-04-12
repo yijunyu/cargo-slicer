@@ -30,16 +30,21 @@ Both baseline and vslice-cc use identical RUSTFLAGS (`-Z threads=8`, wild linker
 |---------|----------|-------------|---------|
 | zeroclaw (4 crates) | 794 s | 547 s | **1.45×** |
 
-### Registry-cache speedups (warm-cache daemon alone, rust-perf suite)
+### Registry-cache speedups (warm-cache daemon alone, verified Apr 2026)
 
-These numbers have not yet been re-verified with the current protocol and
-should be treated as provisional:
+Both baseline and warmed use nightly + `-Z threads=8`. Interleaved rounds,
+dispatch pre-warmed, `rm -rf target/` before each run.
 
 | Crate | Baseline | Warmed | Speedup |
 |-------|----------|--------|---------|
-| image 0.25.6 | 40.7 s | 4.8 s | **8.5×** |
-| cargo 0.87.1 | 134 s | 58 s | **2.3×** |
-| syn 2.0 | 6.7 s | 4.0 s | **1.7×** |
+| image 0.25 | 4.9 s | 2.1 s | **2.3×** |
+| syn 2.0 | 1.0 s | 0.66 s | **1.5×** |
+
+> An earlier version of this table claimed **8.5×** for image (40.7 s →
+> 4.8 s) and **1.7×** for syn (6.7 s → 4.0 s). Those baselines were
+> measured without `-Z threads=8` and the wild linker, while the warmed
+> runs had them — the same apples-to-oranges error as the nushell 5.1×.
+> cargo 0.87.1 (claimed 2.3×) has not yet been re-verified.
 
 ## Requirements
 
