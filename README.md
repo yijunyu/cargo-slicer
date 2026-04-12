@@ -83,7 +83,6 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 
 | Project | Before | After | Speedup |
 |---------|--------|-------|---------|
-| zeroclaw (cold) | 1,561s | 98s | **15.9×** |
 | nushell (cold) | 597s | 117s | **5.1×** |
 | zed (incremental) | 1,025s | 744s | **1.38×** |
 | cargo-slicer itself | 143s | 82s | **1.74×** |

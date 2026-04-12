@@ -12,9 +12,36 @@ This document tracks major achievements, optimizations, and milestones.
 - `cargo-warmup init --tier=1` pre-compiles top-500 crates.io deps once per toolchain (~10 min).
 - Cache hits serve pre-built artifacts in <1ms; subsequent cold builds skip recompiling
   `serde`, `syn`, `proc-macro2`, `tokio`, etc.
-- **Cold-build results**: zeroclaw 1,561s → 98s (**15.9×**), nushell 597s → 117s (**5.1×**),
-  zed 505s → 355s (**1.4×**). Zed's lower gain is expected: WebRTC C++ build script cannot
-  be cached as an rlib.
+- **Cold-build results**: nushell 597s → 117s (**5.1×**), zed 505s → 355s (**1.4×**).
+  Zed's lower gain is expected: WebRTC C++ build script cannot be cached as an rlib.
+  zeroclaw was previously listed at **15.9×** but that number was retracted on
+  2026-04-11 — it came from a run that silently failed before producing a binary.
+  An interim post-fix measurement read 511s → 623s (**0.82×, a regression**) and
+  was documented as such; that session's 511 s baseline was never reproduced.
+  A 3×3-runs remeasurement showed **1.29×** (baseline 681s, vslice-cc 528s),
+  and an interleaved 3-round measurement — round 1: 686s / 524s; round 2:
+  688s / 519s; round 3: 685s / 524s — confirmed **1.31×** (baseline ±0.2%,
+  vslice-cc ±0.5%). Interleaving rules out thermal and run-order effects.
+  zeroclaw has only 1.6% stubbable mono items overall (3,786 of ~241k;
+  lib 0.36%, bin 4.4%), but the binary target's 4.4% stub density concentrates
+  the heavy-LLVM items — that's where the ~160s wall-clock win comes from.
+  No warm registry cache is in play (cargo-warmup is not installed on the
+  measurement machine); both modes compile from scratch. Three bugs were fixed
+  during the investigation:
+  (1) pre-analysis keyed cache files by package name but the driver reads target
+  name, causing cache misses on any crate that renames its lib/bin via
+  `[lib] name = X`;
+  (2) the `mir_built` edge-scanning override was allowed to run during default-phase
+  builds on binary targets (whenever `cached_marked.is_none()`), and its mere
+  presence interacted with async-fn closure borrow-checking to trigger an E0391
+  cycle through `type_of({opaque#N})` → `resolve_instance` → normalize → `type_of`
+  — five recursive async fns in zeroclawlabs hit this. Fix: gate edge-scanning
+  on `phase == "analysis" || phase == "lazy-metadata"` so the override is never
+  installed during plain builds;
+  (3) when edge-scanning *does* legitimately run, the `has_opaque_types()` guard
+  alone was too narrow — `Instance::try_resolve` internally calls
+  `normalize_erasing_regions`, which hits coroutine/alias substs too. Mirror
+  rustc's own bailout pattern: `has_opaque_types() || has_coroutines() || has_aliases()`.
 
 #### Multi-project build ordering (`cargo warmup schedule` / `build-all`)
 - Greedy "heaviest-overlap-first" algorithm: seed = project with largest total dep weight;
