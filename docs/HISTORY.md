@@ -12,8 +12,11 @@ This document tracks major achievements, optimizations, and milestones.
 - `cargo-warmup init --tier=1` pre-compiles top-500 crates.io deps once per toolchain (~10 min).
 - Cache hits serve pre-built artifacts in <1ms; subsequent cold builds skip recompiling
   `serde`, `syn`, `proc-macro2`, `tokio`, etc.
-- **Cold-build results**: nushell 597s → 117s (**5.1×**), zed 505s → 355s (**1.4×**).
-  Zed's lower gain is expected: WebRTC C++ build script cannot be cached as an rlib.
+- **Cold-build results (verified Apr 2026, identical RUSTFLAGS)**: ripgrep 10.5s → 7s
+  (**1.50×**), zeroclaw 686s → 522s (**1.31×**), nushell 103s → 82s (**1.26×**).
+  An earlier version claimed nushell at **5.1×** (597s → 117s) but that was an
+  apples-to-oranges comparison: the baseline lacked `-Z threads=8` and the wild
+  linker that the vslice-cc run used. Zed (1.38×) has not yet been re-verified.
   zeroclaw was previously listed at **15.9×** but that number was retracted on
   2026-04-11 — it came from a run that silently failed before producing a binary.
   An interim post-fix measurement read 511s → 623s (**0.82×, a regression**) and

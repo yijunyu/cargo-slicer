@@ -19,17 +19,26 @@ macros. The slicer correctly identifies this.
 
 ## Virtual slicer — real binary projects
 
-| Project | Baseline | cargo-slicer | Speedup | Notes |
-|---------|----------|-------------|---------|-------|
-| **zeroclaw** (4 local crates) | 686 s | 522 s | **1.31× (23.9% faster)** | 3,786 stubs / ~241k mono items (1.6% overall, 4.4% bin); speedup from seed-guided codegen filtering on the binary target |
-| nushell (41 local crates) | 596,593 ms | 108,488–126,587 ms | **4.7–5.5×** | 644 stubs |
-| zed (232 local crates, warm cache) | 505,023 ms | ~355,000 ms | **1.4×** | local crates dominate |
+All measurements use identical RUSTFLAGS for both baseline and vslice-cc
+(`-Z threads=8 -C linker=clang -C link-arg=--ld-path=wild`). 48-core machine,
+Apr 2026, 2–3 runs per mode.
 
-> zeroclaw's 1.31× comes from seed-guided codegen filtering on the binary
-> target (4.4% stub density, heavy-LLVM items). Confirmed via 3 interleaved
-> rounds (baseline ±0.2%, vslice-cc ±0.5%). An earlier measurement claimed
-> 0.82× regression — that session's baseline (~511 s) never reproduced;
-> current baseline is stable at ~686 s across 7+ runs.
+| Project | Baseline | vslice-cc | Speedup | Notes |
+|---------|----------|-----------|---------|-------|
+| **ripgrep** (50K LOC) | 10.5 s | 7 s | **1.50×** | |
+| **zeroclaw** (4 local crates) | 686 s | 522 s | **1.31×** | 3,786 stubs / ~241k mono items (1.6% overall, 4.4% bin) |
+| **nushell** (41 local crates) | 103 s | 82 s | **1.26×** | |
+
+> **Retracted claims**: an earlier version of this table reported nushell at
+> **5.1×** (597 s → 117 s). That was an apples-to-oranges comparison: the
+> baseline was measured *without* `-Z threads=8` and the wild linker, while
+> the vslice-cc run had them enabled. With identical RUSTFLAGS, nushell's
+> honest speedup is 1.26×. Similarly, ripgrep was listed at 1.10× (13.4 s →
+> 12.2 s) with old RUSTFLAGS; the current measurement shows 1.50×.
+>
+> Zed (1.38×), helix (1.26×), cargo-slicer (1.74×), and rustc-perf (1.18×)
+> have not yet been re-verified with the current protocol and are omitted
+> until they are.
 
 ## Docker image — `build-slicer` vs plain `cargo build`
 

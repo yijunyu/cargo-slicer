@@ -2,43 +2,44 @@
 
 **Rust builds are slow. cargo-slicer makes them fast.**
 
-A cold release build of [Zed](https://zed.dev) takes 17 minutes. With cargo-slicer it takes under 12. The `image` crate goes from 40 seconds to 1.4 seconds — **27.9×**.
-
-These numbers come from two complementary techniques working together:
+Two complementary techniques work together:
 
 | Technique | What it does | Typical gain |
 |-----------|-------------|-------------|
-| **Virtual Slicer** | Stubs unreachable functions at the MIR level so LLVM never sees them | 1.6–28× per-crate |
+| **Virtual Slicer** | Stubs unreachable functions at the MIR level so LLVM never sees them | 1.2–1.5× per workspace |
 | **Warm-Cache Daemon** | Pre-compiles registry crates once, serves cached `.rlib` files on every subsequent build | skips 100% of registry compilation |
 
 You do not need to understand the internals to use them. The [all-in-one script](all-in-one.md) runs the full pipeline in one command.
 
 ## Real-World Results
 
-### Per-crate speedups (virtual slicer alone)
+### Verified benchmarks (Apr 2026, host-native, no warm cache)
 
-| Project | Baseline | cargo-slicer | Speedup |
+Both baseline and vslice-cc use identical RUSTFLAGS (`-Z threads=8`, wild linker).
+2–3 runs per mode, 48-core machine.
+
+| Project | Baseline | vslice-cc | Speedup |
+|---------|----------|-----------|---------|
+| ripgrep (50K LOC) | 10.5 s | 7 s | **1.50×** |
+| zeroclaw (4 crates) | 686 s | 522 s | **1.31×** |
+| nushell (41 crates) | 103 s | 82 s | **1.26×** |
+
+### Docker image (with pre-warmed registry cache)
+
+| Project | Baseline | build-slicer | Speedup |
 |---------|----------|-------------|---------|
-| image 0.25.6 | 40.7 s | 1.5 s | **27.9×** |
-| nushell (41 crates) | 597 s | 117 s | **4.7–5.5×** |
-| ripgrep 14.1.1 | 24.1 s | 5.9 s | **4.1×** |
-| cargo 0.87.1 | 134 s | 62 s | **2.2×** |
-| zed (232 crates, warm) | 505 s | ~355 s | **1.4×** |
-| zeroclaw (4 crates) | 686 s | 522 s | **1.31× (23.9% faster)** |
-
-> zeroclaw's 1.31× comes from seed-guided codegen filtering on the binary
-> target (4.4% stub density, heavy-LLVM items). Measured via 3 interleaved
-> rounds (±0.2% baseline, ±0.5% vslice-cc).
+| zeroclaw (4 crates) | 794 s | 547 s | **1.45×** |
 
 ### Registry-cache speedups (warm-cache daemon alone, rust-perf suite)
+
+These numbers have not yet been re-verified with the current protocol and
+should be treated as provisional:
 
 | Crate | Baseline | Warmed | Speedup |
 |-------|----------|--------|---------|
 | image 0.25.6 | 40.7 s | 4.8 s | **8.5×** |
 | cargo 0.87.1 | 134 s | 58 s | **2.3×** |
 | syn 2.0 | 6.7 s | 4.0 s | **1.7×** |
-
-Combined, the two techniques multiply: registry deps are served from cache, local crate codegen is cut by the slicer, and only the irreducible minimum reaches LLVM.
 
 ## Requirements
 

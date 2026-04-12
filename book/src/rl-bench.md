@@ -41,29 +41,26 @@ cost = compile_time / pass_rate
 
 How many RL samples fit in one GPU-cluster-hour at a given rollout fraction.
 
-## Example output (nushell, 5.1× speedup)
+## Example output (nushell, 1.26× speedup)
 
-Numbers below are nushell — a workspace that benefits from vslice-cc with a
-clear ~5× win. A previous version of this example used zeroclaw and claimed
-15.8×; that number was invalid (see `benchmarks.md` for the retraction).
-zeroclaw's most recent measurement (2026-04-11, interleaved 3 rounds) is
-**1.31× faster** (686 s → 522 s). Only 1.6% of zeroclaw's mono items are
-stubbable overall, but 4.4% of its binary-target mono items are — those are
-the heavy-LLVM ones, and seed-guided codegen filtering of them produces the
-~160 s win.
+Numbers below are nushell — verified Apr 2026 with identical RUSTFLAGS for
+both modes (`-Z threads=8`, wild linker). An earlier version of this example
+claimed 5.1× for nushell; that was an apples-to-oranges comparison where the
+baseline lacked the parallel frontend and fast linker. The honest speedup is
+1.26× (103 s → 82 s).
 
 ```
   KPI 1 — Cold-Build Throughput (samples/hour)
-    Baseline   :   596.6s  →       6 samples/hr
-    cargo-slicer:  117.0s  →      30 samples/hr  (5.1× faster)
+    Baseline   :   103.0s  →      34 samples/hr
+    cargo-slicer:   82.0s  →      43 samples/hr  (1.26× faster)
 
   KPI 2 — Incremental Feedback Latency (cargo check)
     Baseline   :    12.4s  →     290 feedback-loops/hr
     cargo-slicer:    4.1s  →     878 feedback-loops/hr  (3.0× faster)
 
   Cluster-Hour Equivalent (8 GPUs, 80% rollout fraction)
-    Baseline   :      48 samples / cluster-hour
-    cargo-slicer:     240 samples / cluster-hour  (5× more data)
+    Baseline   :     272 samples / cluster-hour
+    cargo-slicer:    344 samples / cluster-hour  (1.26× more data)
 ```
 
 ## Persisting results
