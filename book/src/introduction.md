@@ -44,7 +44,8 @@ dispatch pre-warmed, `rm -rf target/` before each run.
 > 4.8 s) and **1.7×** for syn (6.7 s → 4.0 s). Those baselines were
 > measured without `-Z threads=8` and the wild linker, while the warmed
 > runs had them — the same apples-to-oranges error as the nushell 5.1×.
-> cargo 0.87.1 (claimed 2.3×) has not yet been re-verified.
+> cargo 0.87.1 (claimed 2.3×) is a regression with fair RUSTFLAGS
+> (dispatch overhead serializes the parallel build).
 
 ## Requirements
 
