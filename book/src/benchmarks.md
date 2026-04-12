@@ -25,30 +25,11 @@ macros. The slicer correctly identifies this.
 | nushell (41 local crates) | 596,593 ms | 108,488–126,587 ms | **4.7–5.5×** | 644 stubs |
 | zed (232 local crates, warm cache) | 505,023 ms | ~355,000 ms | **1.4×** | local crates dominate |
 
-> **zeroclaw measurement history (2026-04-11)**: a prior version of this table
-> reported zeroclaw at **15.8×**. That number was invalid — it came from a run
-> where the sliced side errored out before producing a binary. Three bugs were
-> responsible: (1) pre-analysis keyed cache files by the package name
-> `zeroclawlabs` but the compiler sees the target name `zeroclaw` from
-> `[lib] name = "zeroclaw"`, so every compilation unit was a cache miss;
-> (2) the driver's `mir_built` edge-scanning mode was wrongly allowed to run
-> during default-phase builds on binary targets, causing an E0391 query cycle
-> through five recursive async fns; (3) the `has_opaque_types()` guard in
-> edge scanning was too narrow and missed coroutine/alias substs. All three
-> are now fixed. An interim session showed **0.82×** (baseline 511 s,
-> vslice-cc 623 s) and was documented as a regression; that session's baseline
-> never reproduced. A follow-up 3×3-runs measurement showed **1.29×** (baseline
-> 681 s, vslice-cc 528 s), and an interleaved 3-round measurement — round 1:
-> 686 s / 524 s; round 2: 688 s / 519 s; round 3: 685 s / 524 s — confirmed
-> **1.31×** with baseline spread ±0.2% and vslice-cc spread ±0.5%. Interleaving
-> rounds (baseline, vslice-cc, baseline, vslice-cc, …) rules out thermal and
-> run-order effects. The speedup does not come from warm-cache hits — no
-> cargo-warmup cache exists on the measurement machine; both modes compile
-> from scratch. It comes from seed-guided codegen filtering: BFS pre-analysis
-> identifies unreachable items per crate, and the driver skips LLVM codegen
-> for them. Only 1.6% of zeroclaw's mono items are stubbed overall, but the
-> binary target has 4.4% stub density (3,184 of 72,744 mono items) and those
-> items carry disproportionate LLVM cost, producing the ~160 s wall-clock win.
+> zeroclaw's 1.31× comes from seed-guided codegen filtering on the binary
+> target (4.4% stub density, heavy-LLVM items). Confirmed via 3 interleaved
+> rounds (baseline ±0.2%, vslice-cc ±0.5%). An earlier measurement claimed
+> 0.82× regression — that session's baseline (~511 s) never reproduced;
+> current baseline is stable at ~686 s across 7+ runs.
 
 ## Warm-cache daemon — rust-perf suite
 
