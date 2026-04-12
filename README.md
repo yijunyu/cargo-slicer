@@ -83,6 +83,7 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 
 | Project | Before | After | Speedup |
 |---------|--------|-------|---------|
+| helix (Rust, cold) | 68s | 44s | **1.55×** |
 | ripgrep (Rust, cold) | 10.5s | 7s | **1.50×** |
 | zeroclaw (Rust, cold) | 686s | 522s | **1.31×** |
 | nushell (Rust, cold) | 103s | 82s | **1.26×** |

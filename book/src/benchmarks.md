@@ -25,20 +25,16 @@ Apr 2026, 2–3 runs per mode.
 
 | Project | Baseline | vslice-cc | Speedup | Notes |
 |---------|----------|-----------|---------|-------|
+| **helix** (16 local crates) | 68 s | 44 s | **1.55×** | |
 | **ripgrep** (50K LOC) | 10.5 s | 7 s | **1.50×** | |
 | **zeroclaw** (4 local crates) | 686 s | 522 s | **1.31×** | 3,786 stubs / ~241k mono items (1.6% overall, 4.4% bin) |
 | **nushell** (41 local crates) | 103 s | 82 s | **1.26×** | |
 
-> **Retracted claims**: an earlier version of this table reported nushell at
-> **5.1×** (597 s → 117 s). That was an apples-to-oranges comparison: the
-> baseline was measured *without* `-Z threads=8` and the wild linker, while
-> the vslice-cc run had them enabled. With identical RUSTFLAGS, nushell's
-> honest speedup is 1.26×. Similarly, ripgrep was listed at 1.10× (13.4 s →
-> 12.2 s) with old RUSTFLAGS; the current measurement shows 1.50×.
->
-> Zed (1.38×), helix (1.26×), cargo-slicer (1.74×), and rustc-perf (1.18×)
-> have not yet been re-verified with the current protocol and are omitted
-> until they are.
+> **Retracted claims**: nushell was reported at **5.1×** — apples-to-oranges
+> RUSTFLAGS mismatch; honest speedup is 1.26×. cargo-slicer (self) was
+> claimed at 1.74× but re-verified at 1.00× (only 1 driver crate, 0 stubs).
+> Zed (1.38×) could not be re-verified (webrtc-sys build dep requires
+> newer system toolchain).
 
 ## Docker image — `build-slicer` vs plain `cargo build`
 
