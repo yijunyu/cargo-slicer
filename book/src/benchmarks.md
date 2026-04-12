@@ -27,14 +27,13 @@ Apr 2026, 2–3 runs per mode.
 |---------|----------|-----------|---------|-------|
 | **helix** (16 local crates) | 68 s | 44 s | **1.55×** | |
 | **ripgrep** (50K LOC) | 10.5 s | 7 s | **1.50×** | |
+| **zed** (209 local crates) | 1098 s | 767 s | **1.43×** | 76 driver, 131 skip |
 | **zeroclaw** (4 local crates) | 686 s | 522 s | **1.31×** | 3,786 stubs / ~241k mono items (1.6% overall, 4.4% bin) |
 | **nushell** (41 local crates) | 103 s | 82 s | **1.26×** | |
 
 > **Retracted claims**: nushell was reported at **5.1×** — apples-to-oranges
 > RUSTFLAGS mismatch; honest speedup is 1.26×. cargo-slicer (self) was
 > claimed at 1.74× but re-verified at 1.00× (only 1 driver crate, 0 stubs).
-> Zed (1.38×) could not be re-verified (webrtc-sys build dep requires
-> newer system toolchain).
 
 ## Docker image — `build-slicer` vs plain `cargo build`
 

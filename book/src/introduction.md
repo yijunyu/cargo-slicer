@@ -22,6 +22,7 @@ Both baseline and vslice-cc use identical RUSTFLAGS (`-Z threads=8`, wild linker
 |---------|----------|-----------|---------|
 | helix (16 crates) | 68 s | 44 s | **1.55×** |
 | ripgrep (50K LOC) | 10.5 s | 7 s | **1.50×** |
+| zed (209 crates) | 1098 s | 767 s | **1.43×** |
 | zeroclaw (4 crates) | 686 s | 522 s | **1.31×** |
 | nushell (41 crates) | 103 s | 82 s | **1.26×** |
 
