@@ -12,7 +12,8 @@ docker run --rm --cpus=48 \
 
 The image includes all binaries (`cargo-slicer-rustc`, `cargo_warmup_pch`, etc.) and a
 pre-warmed registry cache. `--cpus=48` ensures the container uses all available cores.
-Replace `48` with the output of `nproc` on your machine.
+Replace `48` with the output of `nproc` on your machine. Verified on zeroclaw:
+**1.45× speedup** (794 s → 547 s) vs plain `cargo build --release`.
 
 > **First run**: the container runs `cargo-slicer pre-analyze` automatically if no
 > `.slicer-cache/` directory is found, then builds with the full 3-layer pipeline.

@@ -31,6 +31,21 @@ macros. The slicer correctly identifies this.
 > 0.82× regression — that session's baseline (~511 s) never reproduced;
 > current baseline is stable at ~686 s across 7+ runs.
 
+## Docker image — `build-slicer` vs plain `cargo build`
+
+The Docker image (`ghcr.io/yijunyu/cargo-slicer:latest`) includes a pre-warmed
+registry cache, so the full pipeline benefits from both warm-cache hits and
+codegen filtering. Sequential runs, clean `target/` before each:
+
+| Project | Baseline | `build-slicer` | Speedup |
+|---------|----------|----------------|---------|
+| **zeroclaw** (4 crates) | 794 s | 547 s | **1.45×** |
+
+The Docker baseline is slower than host-native (794 s vs 686 s) due to
+container overhead, but `build-slicer` compensates via the warm registry
+cache (pre-compiled `.rlib` files for registry deps). The extra ~14% boost
+over the host-native 1.31× comes from this cache layer.
+
 ## Warm-cache daemon — rust-perf suite
 
 | Crate | Baseline | Warmed | Speedup |
