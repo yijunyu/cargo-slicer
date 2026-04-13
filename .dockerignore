@@ -1,0 +1,6 @@
+target/
+.slicer-cache/
+.git/
+bench-results.db
+*.cast
+demo.gif

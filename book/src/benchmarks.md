@@ -40,20 +40,29 @@ Apr 2026, 2–3 runs per mode.
 > RUSTFLAGS mismatch; honest speedup is 1.26×. cargo-slicer (self) was
 > claimed at 1.74× but re-verified at 1.00× (only 1 driver crate, 0 stubs).
 
-## Docker image — `build-slicer` vs plain `cargo build`
+## Docker benchmarks (`docker run cargo-slicer bench`)
 
-The Docker image (`ghcr.io/yijunyu/cargo-slicer:latest`) includes a pre-warmed
-registry cache, so the full pipeline benefits from both warm-cache hits and
-codegen filtering. Sequential runs, clean `target/` before each:
+Fair comparison inside Docker: same nightly toolchain, `cargo fetch` before
+timing (excludes download time), `cargo clean` between baseline and slicer.
+Slicer timing includes `cargo-slicer pre-analyze` overhead.
 
-| Project | Baseline | `build-slicer` | Speedup |
-|---------|----------|----------------|---------|
-| **zeroclaw** (4 crates) | 794 s | 547 s | **1.45×** |
+| Project | Baseline | Slicer | Speedup |
+|---------|----------|--------|---------|
+| **zed** (209 crates) | 1149 s | 545 s | **2.11×** |
+| **helix** (16 crates) | 95 s | 59 s | **1.61×** |
+| **zeroclaw** (4 crates) | 842 s | 542 s | **1.55×** |
+| **ripgrep** (17 crates) | 15 s | 12 s | **1.31×** |
+| **nushell** (41 crates) | 118 s | 94 s | **1.25×** |
 
-The Docker baseline is slower than host-native (794 s vs 686 s) due to
-container overhead, but `build-slicer` compensates via the warm registry
-cache (pre-compiled `.rlib` files for registry deps). The extra ~14% boost
-over the host-native 1.31× comes from this cache layer.
+Docker speedups are higher than bare-metal for large projects (zed 2.11×
+vs 1.43×) because fewer cores amplify the benefit of eliminating codegen
+work — less parallelism means each eliminated function saves more wall time.
+
+```bash
+# Run the benchmark yourself
+docker build -t cargo-slicer .
+docker run --rm -v /path/to/project:/workspace/project cargo-slicer bench
+```
 
 ## Warm-cache daemon — verified (Apr 2026)
 
