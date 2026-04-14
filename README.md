@@ -81,14 +81,106 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 
 ## Benchmark highlights
 
-| Project | Before | After | Speedup |
-|---------|--------|-------|---------|
+Bare-metal (48-core, identical RUSTFLAGS, interleaved rounds):
+
+| Project | Baseline | Slicer | Speedup |
+|---------|----------|--------|---------|
 | helix (Rust, cold) | 68s | 44s | **1.55×** |
 | ripgrep (Rust, cold) | 10.5s | 7s | **1.50×** |
 | zed (Rust, cold) | 1098s | 767s | **1.43×** |
 | zeroclaw (Rust, cold) | 686s | 522s | **1.31×** |
 | nushell (Rust, cold) | 103s | 82s | **1.26×** |
 | LLVM 21 (C++, -j48) | ~308s | ~252s | **1.22×** |
+
+Docker (single-run, `cargo fetch` + `cargo clean` between runs):
+
+| Project | Baseline | Slicer | Speedup |
+|---------|----------|--------|---------|
+| zed (209 crates) | 1149s | 545s | **2.11×** |
+| helix (16 crates) | 95s | 59s | **1.61×** |
+| zeroclaw (4 crates) | 842s | 542s | **1.55×** |
+| ripgrep (17 crates) | 15s | 12s | **1.31×** |
+| nushell (41 crates) | 118s | 94s | **1.25×** |
+
+---
+
+## Reproduce the evaluation
+
+The Docker image bundles a `bench` entrypoint that runs a fair comparison
+(shared `cargo fetch`, `cargo clean` between runs, slicer timing includes
+pre-analyze).
+
+### One command per project
+
+```bash
+# Clone a target project first
+git clone --depth 1 https://github.com/BurntSushi/ripgrep /tmp/ripgrep
+docker run --rm -v /tmp/ripgrep:/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest bench
+```
+
+Output prints `Baseline: …s` / `Slicer: …s` / `Speedup: …x`.
+
+### Project-specific flags
+
+```bash
+# helix — tree-sitter grammar fetch needs git safe.directory
+git clone --depth 1 https://github.com/helix-editor/helix /tmp/helix
+docker run --rm -v /tmp/helix:/workspace/project \
+  -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+  -e GIT_CONFIG_VALUE_0='*' \
+  ghcr.io/yijunyu/cargo-slicer:latest bench
+
+# zed — webrtc-sys C++20 needs clang, not gcc 11.x
+git clone --depth 1 https://github.com/zed-industries/zed /tmp/zed
+docker run --rm -v /tmp/zed:/workspace/project \
+  -e CC=clang -e CXX=clang++ \
+  ghcr.io/yijunyu/cargo-slicer:latest bench
+```
+
+### Run baseline and slicer separately
+
+If you want to inspect each build independently (e.g. to capture logs):
+
+```bash
+docker run --rm -v /tmp/ripgrep:/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest build-baseline
+# then, in a fresh container (or after `cargo clean`):
+docker run --rm -v /tmp/ripgrep:/workspace/project \
+  ghcr.io/yijunyu/cargo-slicer:latest build-slicer
+```
+
+`build-slicer` runs: `cargo fetch` → `cargo-slicer pre-analyze` →
+`cargo +nightly build --release` with the 3-layer `RUSTC_WRAPPER` chain
+(`cargo_warmup_pch` → `cargo_warmup_dispatch` → `cargo_slicer_dispatch`).
+`build-baseline` runs: `cargo fetch` → plain `cargo +nightly build --release`.
+
+### Interactive debugging
+
+```bash
+docker run --rm -it -v /tmp/ripgrep:/workspace/project \
+  --entrypoint bash ghcr.io/yijunyu/cargo-slicer:latest
+# inside the container:
+build-baseline
+cargo clean      # required for a fair second run
+build-slicer
+```
+
+### Bare-metal reproduction
+
+For the 48-core bare-metal numbers (the first table above), use the
+benchmark harness in the source tree:
+
+```bash
+git clone https://github.com/yijunyu/cargo-slicer /tmp/cargo-slicer
+cd /tmp/cargo-slicer
+./scripts/ci_bench_multicrate.sh   # 7 projects, baseline vs vslice-cc
+# or a single project:
+./scripts/bench_fresh_build.sh ripgrep vslice-cc 3
+```
+
+Results are written to `bench-results.db` (SQLite) with an auto-generated
+HTML report.
 
 ---
 
