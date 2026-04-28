@@ -32,9 +32,18 @@ Measurement: wall seconds (`$(date +%s)`), 2–3 runs, cold build (target/ delet
 | Project | stage2 baseline | `-Z dead-fn-elimination` | delta   | fns eliminated |
 |---------|----------------|--------------------------|---------|----------------|
 | zed     | 1356s (22.6m)  | 1246s (20.8m)            | **-8%** | 248            |
-| rustc   | 174s           | 163s                     | **-6%** | 10             |
+| rustc workspace (67 crates) [^rustc-workspace] | 174s | 163s | **-6%** | 10 |
 | helix   | 85s            | 85s                      | 0%      | 18             |
 | ripgrep | 13s            | 13s                      | 0%      | 2,468          |
+
+[^rustc-workspace]: This row reflects `x.py build compiler/rustc --stage 1` —
+i.e., compiling the 67 workspace crates that make up `librustc_driver.so`,
+not the ~70-line `rustc` binary crate itself. Per @petrochenkov's V2 review
+feedback, the original "rustc" label was misleading: the elimination occurs
+across the leaf workspace crates (`rustc_passes`, `rustc_resolve`, etc.)
+where private and binary-only helpers are eligible. See
+`docs/vadim-petrochenkov-review-feedback.md` and
+`docs/vadim-response-results.md`.
 
 **Pattern**: The flag pays off on large binary crates; smaller projects break even.
 The BFS traversal cost offsets the LLVM savings at small scale.
@@ -58,6 +67,42 @@ Measurement: wall time, 3 runs each, cold build (target/ deleted)
 
 The external tool has overhead (disk I/O, IPC, ABI versioning per nightly).
 The in-tree flag eliminates all of that.
+
+### ASE 2026 corpus sweep — top 2,669 crates by downloads (2026-04-26)
+
+Independent third-party correctness validation of the userspace cargo-slicer
+(same algorithm as the in-tree patch) on a representative slice of the
+ecosystem. Run on `cargo +nightly` baseline vs cargo-slicer leg via
+`scripts/bench_ase_corpus.sh`; libraries gated on build success, binary
+crates additionally smoke-tested with `--version` / `--help`.
+
+| Metric                           | Value |
+|----------------------------------|------:|
+| Crates fetched                   | 2,669 |
+| Crates that ran                  | 2,603 |
+| Both legs built (clean compare)  | **2,452** |
+| **Slicer-only regressions**      | **0** |
+| Median build speedup             | **1.50×** |
+| % speedup ≥ 1.0×                 | 73.1% |
+| % speedup ≥ 1.5×                 | 49.8% |
+| % speedup ≥ 2.0×                 | 35.9% |
+
+Headline: zero correctness regressions across 2,452 crates; median 1.50×
+build speedup. Detailed per-concern empirical evidence and reproduction
+instructions live in `docs/vadim-response-results.md`.
+
+### Patched stage1 oracle (rust-1.90.0 stable tag, 2026-04-26)
+
+Re-validated the in-tree patch against `rust-1.90.0` (commit `1159e78c`)
+with `[rust] debug-assertions = true, overflow-checks = true` to catch the
+V9 invariant `reachable_set ⊆ post-BFS-set` at runtime.
+
+| Run                          | Wall time | Fns eliminated | Output check |
+|------------------------------|----------:|---------------:|--------------|
+| stage1 baseline (ripgrep)    | 62.1 s    | 0              | runs |
+| stage1 + `-Z dead-fn-elim`   | 59.9 s    | 904            | identical to baseline |
+
+debug_assert holds — no ICE, binary correct.
 
 ---
 
@@ -517,6 +562,19 @@ real-world projects (ripgrep, helix, zed, rustc itself).
   observation is a key motivation for this MCP — the external tool has proven the
   algorithm; the in-tree patch (~422 lines) is the natural completion of that work.
   See `docs/wesley-workingjubilee-review-feedback.md`.
+
+- **@petrochenkov**: Nine-point review (V1–V9) of the seed/eligibility
+  surface. Adopted: scope is now explicit "binary crates only" (V1);
+  benchmark labels corrected (V2); seeds are
+  `reachable_set ∪ entry_fn ∪ address_taken ∪ vtable_methods` rather than a
+  re-implementation (V3); cross-crate call graph removed (V4); function-pointer
+  coercions and inline-asm symbol uses are now tracked (V5a/V5b);
+  `requires_monomorphization` replaces blanket `generics > 0` (V6b);
+  vestigial `#[test]`/`#[bench]` and `unsafe`/signature-walk checks removed
+  (V7, V8a, V8b); empirical V9 answer: median 1.50× speedup with zero
+  regressions across 2,452 crates. Full point-by-point response in
+  `docs/vadim-response-results.md`; review verbatim plus worked
+  examples in `docs/vadim-petrochenkov-review-feedback.md`.
 
 ---
 
