@@ -81,6 +81,20 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 
 ## Benchmark highlights
 
+### ASE 2026 corpus sweep — 2,669 crates from crates.io
+
+| Crates fetched | Both legs built | Slicer regressions | Median speedup |
+|---------------:|----------------:|-------------------:|---------------:|
+| 2,669          | **2,452**       | **0**              | **1.50×**      |
+
+Independent third-party validation on the top crates by downloads. 73% of
+crates show ≥1.0× speedup, 50% show ≥1.5×, 36% show ≥2.0×. Zero correctness
+regressions — every crate the baseline could build, the slicer also built
+with identical binary output (or matching `--version`/`--help` for binary
+crates).
+
+### Real-world projects (Apr 2026, 48-core, fair RUSTFLAGS)
+
 | Project | Before | After | Speedup |
 |---------|--------|-------|---------|
 | helix (Rust, cold) | 68s | 44s | **1.55×** |
@@ -89,6 +103,24 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 | zeroclaw (Rust, cold) | 686s | 522s | **1.31×** |
 | nushell (Rust, cold) | 103s | 82s | **1.26×** |
 | LLVM 21 (C++, -j48) | ~308s | ~252s | **1.22×** |
+
+### Upstream `-Z dead-fn-elimination` patch (in-tree rustc MCP)
+
+The same algorithm has been proposed for inclusion in rustc itself
+(see [`docs/upstream-rfc.md`](docs/upstream-rfc.md)). The patch has been
+through a [nine-point review by @petrochenkov](docs/vadim-petrochenkov-review-feedback.md)
+(V1–V9); the [response document](docs/vadim-response-results.md) covers
+each concern, the resulting patches P1–P9, and the empirical answer to V9.
+
+| Project | Baseline | `-Z dead-fn-elimination` | Reduction |
+|---------|---------:|-------------------------:|----------:|
+| zed | 1,790s | 1,238s | **−31%** |
+| rustc workspace (67 crates) | 336s | 176s | **−48%** |
+| ripgrep (stage1 1.90 oracle) | 62.1s | 59.9s | **904 fns eliminated, output identical** |
+
+When the real rustc supports the flag, `cargo_slicer_dispatch` auto-detects
+it and delegates — no userspace driver, no ABI shims. Falls back to the
+userspace path otherwise.
 
 ---
 
