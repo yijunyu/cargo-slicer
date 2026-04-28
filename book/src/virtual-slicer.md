@@ -78,3 +78,34 @@ RUSTFLAGS="-Z dead-fn-elimination" cargo +nightly build --release
 ```
 
 No extra binary, no nightly ABI compatibility shims.
+
+### Review status (2026-04)
+
+The patch has been through a nine-point review by
+[@petrochenkov][vadim-review] (V1–V9 in the response document). After
+applying the patches:
+
+- Scope is now explicit: **binary crates only** — library crate types
+  early-return (V1).
+- Seeds are `reachable_set ∪ entry_fn ∪ address_taken ∪ vtable_methods`
+  rather than a re-implementation of `reachable_set` (V3, V5a, V5b, V8).
+- The cross-crate call graph has been removed; cross-crate effects come
+  through `reachable_set` seeding (V4).
+- `requires_monomorphization` replaces blanket `generics > 0`, so
+  lifetime-only generics are eligible (V6b).
+- Vestigial `#[test]`/`#[bench]`, `unsafe`, and signature-walk checks have
+  been deleted — their safety is now provided structurally by the seed set
+  (V7, V8a, V8b).
+- Net effect on `dead_fn_elim.rs`: **~419 → ~340 lines**.
+
+**Empirical answer to V9** ("will it converge to `reachable_set`?"): on a
+2,669-crate ASE 2026 corpus sweep, the userspace slicer (same algorithm)
+produced **zero correctness regressions** across 2,452 cleanly-built
+crates and a **1.50× median build speedup**. The patched stage1 oracle on
+`rust-1.90.0` eliminated **904 functions** on ripgrep with binary output
+identical to the baseline.
+
+Full point-by-point response: [`vadim-response-results.md`][vadim-results].
+
+[vadim-review]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-petrochenkov-review-feedback.md
+[vadim-results]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-response-results.md

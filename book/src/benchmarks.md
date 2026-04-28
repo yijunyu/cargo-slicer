@@ -85,13 +85,65 @@ dispatch pre-warmed, `rm -rf target/` before each run.
 A warm cache populated by one project is reused across all projects on the same
 machine.
 
-## Upstream -Z dead-fn-elimination patch
+## Upstream `-Z dead-fn-elimination` patch
+
+These numbers come from the in-tree rustc patch (`src/upstream_patch/`), which
+implements the same algorithm natively in the compiler.
 
 | Project | Baseline | -Z dead-fn-elimination | Reduction |
 |---------|----------|----------------------|-----------|
 | zed | 1,790 s | 1,238 s | **−31%, 9.2 min saved** |
-| rustc | 336 s | 176 s | **−48%, 2.7 min saved** |
+| rustc workspace (67 crates) [^rustc-workspace] | 336 s | 176 s | **−48%, 2.7 min saved** |
 | ripgrep | 13 s | 13 s | break-even (all fns reachable) |
+
+[^rustc-workspace]: Per [@petrochenkov's V2 review feedback][vadim], the
+"rustc" row reflects `x.py build compiler/rustc --stage 1` — the 67
+workspace crates that make up `librustc_driver.so`, not the ~70-line `rustc`
+binary crate. The original "rustc" label was misleading.
+
+### Patched stage1 oracle (rust-1.90.0 stable, 2026-04-26)
+
+The in-tree patch was rebuilt against `rust-1.90.0` (commit `1159e78c`) with
+`[rust] debug-assertions = true, overflow-checks = true` to runtime-check
+the V9 invariant `reachable_set ⊆ post-BFS-set`.
+
+| Run                          | Wall time | Fns eliminated | Output check |
+|------------------------------|----------:|---------------:|--------------|
+| stage1 baseline (ripgrep)    | 62.1 s    | 0              | runs |
+| stage1 + `-Z dead-fn-elim`   | 59.9 s    | **904**        | identical to baseline |
+
+debug_assert holds — no ICE, binary correct under the seed-set invariant.
+
+### ASE 2026 corpus sweep — top 2,669 crates by downloads
+
+Independent third-party correctness validation of the userspace cargo-slicer
+(same algorithm as the in-tree patch) on a representative slice of the
+ecosystem. Run via `scripts/bench_ase_corpus.sh`; library crates gated on
+build success, binary crates additionally smoke-tested with `--version` /
+`--help`.
+
+| Metric                           | Value |
+|----------------------------------|------:|
+| Crates fetched                   | 2,669 |
+| Crates that ran                  | 2,603 |
+| Both legs built (clean compare)  | **2,452** |
+| **Slicer-only regressions**      | **0** |
+| Median build speedup             | **1.50×** |
+| % speedup ≥ 1.0×                 | 73.1% |
+| % speedup ≥ 1.5×                 | 49.8% |
+| % speedup ≥ 2.0×                 | 35.9% |
+
+**Headline**: out of 2,452 crates that built cleanly under both legs, the
+slicer leg produced **zero correctness regressions** and a 1.50× median
+build speedup. The mean (3.96×) is heavily skewed by a long tail (max
+190.4×); the median is the honest number.
+
+Full point-by-point response to the @petrochenkov V1–V9 review and
+reproduction instructions live in [`vadim-response-results.md`][vadim-results]
+on the cargo-slicer repository.
+
+[vadim]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-petrochenkov-review-feedback.md
+[vadim-results]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-response-results.md
 
 ## C/C++ projects — clang-daemon PCH acceleration
 

@@ -13,6 +13,16 @@ You do not need to understand the internals to use them. The [all-in-one script]
 
 ## Real-World Results
 
+### ASE 2026 corpus sweep — 2,669 crates, zero regressions
+
+Independent validation on the top crates by downloads from crates.io:
+
+| Crates fetched | Both legs built | Slicer regressions | Median speedup |
+|---------------:|----------------:|-------------------:|---------------:|
+| 2,669          | **2,452**       | **0**              | **1.50×**      |
+
+Details: [Benchmarks → ASE 2026 corpus sweep](benchmarks.md#ase-2026-corpus-sweep--top-2669-crates-by-downloads).
+
 ### Verified benchmarks (Apr 2026, host-native, no warm cache)
 
 Both baseline and vslice-cc use identical RUSTFLAGS (`-Z threads=8`, wild linker).
