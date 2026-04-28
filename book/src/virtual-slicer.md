@@ -79,6 +79,29 @@ RUSTFLAGS="-Z dead-fn-elimination" cargo +nightly build --release
 
 No extra binary, no nightly ABI compatibility shims.
 
+### Auto-delegation in `cargo_slicer_dispatch`
+
+The dispatch wrapper detects whether the real rustc already implements the
+flag (`rustc -Zhelp | grep dead-fn-elimination`, cached per process). When
+present, dispatch transparently appends `-Zdead-fn-elimination` and execs
+rustc directly — bypassing the userspace driver, the `.slicer-cache`, and
+the per-nightly ABI shim. The userspace path is still used as a fallback
+when the flag is absent.
+
+```bash
+# Patched stable: dispatch detects the flag and delegates automatically
+CARGO_SLICER_VIRTUAL=1 RUSTC_WRAPPER=$(which cargo_slicer_dispatch) \
+  cargo +dfe-stage1 build --release
+
+# Same command on unpatched nightly: dispatch falls back to the userspace driver
+CARGO_SLICER_VIRTUAL=1 RUSTC_WRAPPER=$(which cargo_slicer_dispatch) \
+  cargo +nightly build --release
+```
+
+Override knobs: `CARGO_SLICER_NO_UPSTREAM_FLAG=1` forces the userspace
+path even when the flag is available; `CARGO_SLICER_FORCE_UPSTREAM_FLAG=1`
+skips the probe and assumes the flag is supported.
+
 ### Review status (2026-04)
 
 The patch has been through a nine-point review by

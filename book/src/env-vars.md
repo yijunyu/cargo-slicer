@@ -32,6 +32,16 @@
 | `CARGO_SLICER_SCCACHE` | auto | Path to sccache, or `/nonexistent` to disable |
 | `CARGO_SLICER_RELAX_UNSAFE` | unset | Set to `1` to allow stubbing `unsafe fn` |
 
+## Upstream `-Z dead-fn-elimination` delegation
+
+When the real rustc supports the in-tree MCP flag, dispatch delegates
+automatically (see [Virtual Slicer → Auto-delegation](virtual-slicer.md#auto-delegation-in-cargo_slicer_dispatch)).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CARGO_SLICER_NO_UPSTREAM_FLAG` | unset | Set to `1` to force the userspace driver even when `-Z dead-fn-elimination` is available |
+| `CARGO_SLICER_FORCE_UPSTREAM_FLAG` | unset | Set to `1` to skip the `rustc -Zhelp` probe and assume the flag is present |
+
 ## Caching
 
 | Variable | Default | Description |
