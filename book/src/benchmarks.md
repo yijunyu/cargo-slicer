@@ -138,6 +138,10 @@ slicer leg produced **zero correctness regressions** and a 1.50× median
 build speedup. The mean (3.96×) is heavily skewed by a long tail (max
 190.4×); the median is the honest number.
 
+Full corpus catalog (all 2,669 crates with rank, version, downloads, build
+times, and slicer status): [ASE 2026 Corpus](ase2026-corpus.md)
+· [CSV](https://github.com/yijunyu/cargo-slicer/blob/main/docs/ase2026-corpus.csv).
+
 Full point-by-point response to the @petrochenkov V1–V9 review and
 reproduction instructions live in [`vadim-response-results.md`][vadim-results]
 on the cargo-slicer repository.

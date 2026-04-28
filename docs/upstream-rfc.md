@@ -88,8 +88,11 @@ crates additionally smoke-tested with `--version` / `--help`.
 | % speedup ≥ 2.0×                 | 35.9% |
 
 Headline: zero correctness regressions across 2,452 crates; median 1.50×
-build speedup. Detailed per-concern empirical evidence and reproduction
-instructions live in `docs/vadim-response-results.md`.
+build speedup. Full per-crate catalog (rank, version, downloads, build
+times, status) is published at
+<https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>; the raw CSV
+is in `docs/ase2026-corpus.csv`. Detailed per-concern empirical evidence
+and reproduction instructions live in `docs/vadim-response-results.md`.
 
 ### Patched stage1 oracle (rust-1.90.0 stable tag, 2026-04-26)
 

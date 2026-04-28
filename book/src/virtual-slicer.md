@@ -122,11 +122,11 @@ applying the patches:
 - Net effect on `dead_fn_elim.rs`: **~419 → ~340 lines**.
 
 **Empirical answer to V9** ("will it converge to `reachable_set`?"): on a
-2,669-crate ASE 2026 corpus sweep, the userspace slicer (same algorithm)
-produced **zero correctness regressions** across 2,452 cleanly-built
-crates and a **1.50× median build speedup**. The patched stage1 oracle on
-`rust-1.90.0` eliminated **904 functions** on ripgrep with binary output
-identical to the baseline.
+2,669-crate [ASE 2026 corpus sweep](ase2026-corpus.md), the userspace
+slicer (same algorithm) produced **zero correctness regressions** across
+2,452 cleanly-built crates and a **1.50× median build speedup**. The
+patched stage1 oracle on `rust-1.90.0` eliminated **904 functions** on
+ripgrep with binary output identical to the baseline.
 
 Full point-by-point response: [`vadim-response-results.md`][vadim-results].
 

@@ -93,6 +93,10 @@ regressions — every crate the baseline could build, the slicer also built
 with identical binary output (or matching `--version`/`--help` for binary
 crates).
 
+Full corpus catalog (all 2,669 crates with per-crate timings):
+[**ASE 2026 Corpus**](https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html)
+· [CSV](docs/ase2026-corpus.csv)
+
 ### Real-world projects (Apr 2026, 48-core, fair RUSTFLAGS)
 
 | Project | Before | After | Speedup |

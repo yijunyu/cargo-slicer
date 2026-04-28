@@ -21,7 +21,7 @@ Independent validation on the top crates by downloads from crates.io:
 |---------------:|----------------:|-------------------:|---------------:|
 | 2,669          | **2,452**       | **0**              | **1.50×**      |
 
-Details: [Benchmarks → ASE 2026 corpus sweep](benchmarks.md#ase-2026-corpus-sweep--top-2669-crates-by-downloads).
+Details and full per-crate catalog: [ASE 2026 Corpus](ase2026-corpus.md).
 
 ### Verified benchmarks (Apr 2026, host-native, no warm cache)
 

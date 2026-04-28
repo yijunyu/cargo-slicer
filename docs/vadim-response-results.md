@@ -74,7 +74,10 @@ eliminated, binary correct. The invariant holds.
 
 Goal: independent third-party validation of the userspace cargo-slicer
 (which uses the same algorithm as the in-tree patch) on a representative
-slice of the ecosystem.
+slice of the ecosystem. Canonical corpus reference (full catalog with
+rank, version, downloads, build times, and slicer status):
+<https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>
+(raw CSV: `docs/ase2026-corpus.csv`).
 
 | Metric                           | Value |
 |----------------------------------|------:|
