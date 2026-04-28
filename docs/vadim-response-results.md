@@ -176,20 +176,3 @@ done
 wait
 python3 scripts/aggregate_ase_results.py > results/aggregate_full.json
 ```
-
----
-
-## Outstanding posture
-
-1. Open a draft PR against `rust-lang/rust` referencing this document and
-   `docs/upstream-rfc.md`.
-2. Lead the PR description with: *"this is `reachable_set ∪ entry-BFS`, not
-   a `reachable_set` replacement"* — to dissolve the V9 framing up front.
-3. Cross-link `docs/lcnr-review-feedback.md`,
-   `docs/wesley-workingjubilee-review-feedback.md`,
-   `docs/amanieu-review-feedback.md`, this file, and
-   `docs/vadim-petrochenkov-review-feedback.md` so reviewers see the full
-   review trail.
-4. Re-measure zed and rustc-workspace under the post-P4 algorithm before
-   filing the PR; if numbers regressed materially, restore a *minimal*
-   cross-crate seeding path rather than the full extern call graph.
