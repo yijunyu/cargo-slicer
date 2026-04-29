@@ -15,13 +15,18 @@ You do not need to understand the internals to use them. The [all-in-one script]
 
 ### ASE 2026 corpus sweep — 2,669 crates, zero regressions
 
-Independent validation on the top crates by downloads from crates.io:
+Independent validation on the top crates by downloads from crates.io.
+Numbers are split by crate kind because the in-tree
+`-Z dead-fn-elimination` flag is a no-op on libraries today (per V10/V11
+review, see [ASE 2026 Corpus](ase2026-corpus.md)):
 
-| Crates fetched | Both legs built | Slicer regressions | Median speedup |
-|---------------:|----------------:|-------------------:|---------------:|
-| 2,669          | **2,452**       | **0**              | **1.50×**      |
+| Subset                | Crates | Both legs built | Slicer-only failures | Median speedup |
+|-----------------------|-------:|----------------:|---------------------:|---------------:|
+| **Binaries** (in-tree `-Z`) | 65 | **59**       | **0**              | **1.38×**      |
+| Libraries (userspace tool only) | 2,538 | **2,393** | **0**         | 1.50×          |
 
-Details and full per-crate catalog: [ASE 2026 Corpus](ase2026-corpus.md).
+Zero slicer-only correctness regressions across both subsets. Details and
+full per-crate catalog: [ASE 2026 Corpus](ase2026-corpus.md).
 
 ### Verified benchmarks (Apr 2026, host-native, no warm cache)
 

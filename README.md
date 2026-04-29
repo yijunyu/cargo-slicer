@@ -83,15 +83,18 @@ real  4m10s   (baseline: 5m08s)   Speedup: 1.22×
 
 ### ASE 2026 corpus sweep — 2,669 crates from crates.io
 
-| Crates fetched | Both legs built | Slicer regressions | Median speedup |
-|---------------:|----------------:|-------------------:|---------------:|
-| 2,669          | **2,452**       | **0**              | **1.50×**      |
+Numbers split by crate kind because the in-tree
+`-Z dead-fn-elimination` flag is a no-op on libraries today (per V10/V11
+reframing — see canonical [ASE 2026 Corpus](https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html) page):
 
-Independent third-party validation on the top crates by downloads. 73% of
-crates show ≥1.0× speedup, 50% show ≥1.5×, 36% show ≥2.0×. Zero correctness
-regressions — every crate the baseline could build, the slicer also built
-with identical binary output (or matching `--version`/`--help` for binary
-crates).
+| Subset                              | Crates | Both legs built | Slicer-only failures | Median speedup |
+|-------------------------------------|-------:|----------------:|---------------------:|---------------:|
+| **Binaries** (in-tree `-Z`)         | 65     | **59**          | **0**                | **1.38×**      |
+| Libraries (userspace tool only)     | 2,538  | **2,393**       | **0**                | 1.50×          |
+
+Zero slicer-only correctness regressions across both subsets — every crate
+the baseline could build, the slicer also built (binaries: matching
+`--version`/`--help`).
 
 Full corpus catalog (all 2,669 crates with per-crate timings):
 [**ASE 2026 Corpus**](https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html)

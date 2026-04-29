@@ -70,29 +70,41 @@ The in-tree flag eliminates all of that.
 
 ### ASE 2026 corpus sweep — top 2,669 crates by downloads (2026-04-26)
 
-Independent third-party correctness validation of the userspace cargo-slicer
-(same algorithm as the in-tree patch) on a representative slice of the
+Independent correctness validation on a representative slice of the
 ecosystem. Run on `cargo +nightly` baseline vs cargo-slicer leg via
 `scripts/bench_ase_corpus.sh`; libraries gated on build success, binary
 crates additionally smoke-tested with `--version` / `--help`.
 
+> **Reframing (V10/V11, 2026-04-29)**: numbers are split by crate kind. The
+> in-tree `-Z dead-fn-elimination` flag is a no-op on libraries today
+> (early-return when `entry_fn().is_none()`), so library numbers cannot be
+> folded into a single in-tree-flag headline. The userspace cargo-slicer
+> tool's RUSTC_WRAPPER pipeline does run on libraries; its numbers are
+> reported separately. See `docs/vadim-response-results.md` for the full
+> V10/V11 discussion.
+
+**Binary subset (n=65) — relevant to in-tree `-Z dead-fn-elimination`**:
+
 | Metric                           | Value |
 |----------------------------------|------:|
-| Crates fetched                   | 2,669 |
-| Crates that ran                  | 2,603 |
-| Both legs built (clean compare)  | **2,452** |
-| **Slicer-only regressions**      | **0** |
-| Median build speedup             | **1.50×** |
-| % speedup ≥ 1.0×                 | 73.1% |
-| % speedup ≥ 1.5×                 | 49.8% |
-| % speedup ≥ 2.0×                 | 35.9% |
+| Binary crates attempted          | 65    |
+| Both legs built                  | **59** |
+| **Slicer-only failures**         | **0** |
+| Median build speedup             | **1.38×** |
+| Mean build speedup               | 2.45× |
+| % speedup ≥ 1.0×                 | 69.5% |
+| % speedup ≥ 1.5×                 | 45.8% |
+| % speedup ≥ 2.0×                 | 27.1% |
 
-Headline: zero correctness regressions across 2,452 crates; median 1.50×
-build speedup. Full per-crate catalog (rank, version, downloads, build
-times, status) is published at
-<https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>; the raw CSV
-is in `docs/ase2026-corpus.csv`. Detailed per-concern empirical evidence
-and reproduction instructions live in `docs/vadim-response-results.md`.
+**Library subset (n=2,538) — userspace cargo-slicer only, NOT the `-Z` flag**:
+2,393 of 2,538 libraries built under both legs with **zero slicer-only
+failures**; userspace median 1.50×. This number measures cross-crate
+orchestration in the userspace tool, not the in-tree single-crate flag.
+
+Full per-crate catalog (rank, version, downloads, build times, status) is
+published at <https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>;
+the raw CSV is `docs/ase2026-corpus.csv`. Detailed per-concern empirical
+evidence and reproduction instructions live in `docs/vadim-response-results.md`.
 
 ### Patched stage1 oracle (rust-1.90.0 stable tag, 2026-04-26)
 
@@ -566,18 +578,21 @@ real-world projects (ripgrep, helix, zed, rustc itself).
   algorithm; the in-tree patch (~422 lines) is the natural completion of that work.
   See `docs/wesley-workingjubilee-review-feedback.md`.
 
-- **@petrochenkov**: Nine-point review (V1–V9) of the seed/eligibility
-  surface. Adopted: scope is now explicit "binary crates only" (V1);
-  benchmark labels corrected (V2); seeds are
-  `reachable_set ∪ entry_fn ∪ address_taken ∪ vtable_methods` rather than a
-  re-implementation (V3); cross-crate call graph removed (V4); function-pointer
-  coercions and inline-asm symbol uses are now tracked (V5a/V5b);
-  `requires_monomorphization` replaces blanket `generics > 0` (V6b);
-  vestigial `#[test]`/`#[bench]` and `unsafe`/signature-walk checks removed
-  (V7, V8a, V8b); empirical V9 answer: median 1.50× speedup with zero
-  regressions across 2,452 crates. Full point-by-point response in
-  `docs/vadim-response-results.md`; review verbatim plus worked
-  examples in `docs/vadim-petrochenkov-review-feedback.md`.
+- **@petrochenkov**: Eleven-point review (V1–V11) of scope and the
+  seed/eligibility surface. Adopted V1–V9: benchmark labels corrected (V2);
+  seeds are `reachable_set ∪ entry_fn ∪ address_taken ∪ vtable_methods` rather
+  than a re-implementation (V3); cross-crate call graph removed (V4);
+  function-pointer coercions and inline-asm symbol uses are now tracked
+  (V5a/V5b); `requires_monomorphization` replaces blanket `generics > 0`
+  (V6b); vestigial `#[test]`/`#[bench]` and `unsafe`/signature-walk checks
+  removed (V7, V8a, V8b); empirical V9 answer on the binary subset:
+  **median 1.38× across 59 binary crates with zero slicer-only failures**.
+  V10 (libs work with `reachable_set` seeds — lift V1 early-return) and V11
+  (single-crate elim is mostly redundant; cross-crate orchestration is where
+  the win lives) are tracked as future-work / deferred RFC items rather than
+  patched in this MCP. Full point-by-point response in
+  `docs/vadim-response-results.md`; review verbatim plus worked examples in
+  `docs/vadim-petrochenkov-review-feedback.md`.
 
 ---
 

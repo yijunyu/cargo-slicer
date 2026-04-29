@@ -1,6 +1,6 @@
-# Response to @petrochenkov Review (V1–V9): Status & Empirical Results
+# Response to @petrochenkov Review (V1–V11): Status & Empirical Results
 
-**Date**: 2026-04-27
+**Date**: 2026-04-29 (revised)
 **Source review**: <https://github.com/yijunyu/cargo-slicer/issues/1>
 **Companion documents**:
 - `docs/vadim-petrochenkov-review-feedback.md` — full V1–V9 review with worked examples + patches P1–P9
@@ -10,13 +10,45 @@ This document is the concise round-trip response to Vadim's review: per-concern
 status, the empirical evidence collected after the patches, and what's still
 deferred.
 
+## Reframing (V10–V11, 2026-04-29)
+
+Two follow-up points from Vadim re-scope the contribution and supersede parts
+of the V1–V9 framing below:
+
+- **V10 — libraries**: "the same algorithm will actually work on libraries, if
+  it's implemented correctly." Correct. The V1 early-return on
+  `entry_fn().is_none()` was a scoping convenience, not a correctness
+  requirement. With seeds drawn from `tcx.reachable_set(())` (P3), the BFS is
+  already type-agnostic; the early-return should be lifted so libraries also
+  benefit, with seeds = `reachable_set` (covers `pub` API + `#[no_mangle]` +
+  inline/generic items needed downstream). This is now tracked as future-work
+  (see "Deferred").
+- **V11 — globally is where it pays off**: "crates do not typically contain
+  dead code... only really eliminates dead code if applied globally, to a
+  whole crate dependency tree." Also correct. Within a single crate
+  `-Wunused`/`dead_code` already catches most intra-crate dead code; the real
+  prize is the long tail of `pub` items in dependencies that the current
+  binary's call graph never reaches. The single-crate `-Z` flag captures only
+  the slice of that effect that survives monomorphization + LLVM DCE; the
+  cross-crate orchestration in the userspace cargo-slicer (RUSTC_WRAPPER + a
+  reconciled per-crate seed set) is what reaches the rest. See §3 below — we
+  now report bin-only numbers for the in-tree flag and report the
+  whole-corpus numbers separately as a userspace-tool zero-regression sweep.
+
+The thread is **not** withdrawn: V1–V9 still tightened the patch (~419 → ~340
+lines, three real bugs caught), the V10 fix is a small follow-on, and the
+V11 reframing is what the userspace tool was already doing. See "What's
+still claimed" at the end for the precise residual contribution.
+
 ---
 
 ## Point-by-point status
 
 | ID  | Concern (paraphrase)                                  | Status                  | Patch evidence |
 |-----|--------------------------------------------------------|-------------------------|----------------|
-| V1  | Library code paths are vestigial; bail-out is right    | **Done**                | P1: dropped `is_public()` branch; scope doc'd as "binary crates only" in `dead_fn_elim.rs` |
+| V1  | Library code paths are vestigial; bail-out is right    | **Superseded by V10**   | P1 dropped `is_public()` and scoped to bins; V10 (2026-04-29) clarifies libs *can* work with `reachable_set` seeds — early-return is now future-work to lift |
+| V10 | Same algorithm works on libraries with correct seeds   | **Acknowledged**        | Tracked as future-work; not yet patched (see Deferred) |
+| V11 | Single-crate elimination is mostly redundant; cross-crate is where the win is | **Acknowledged** | Reframes contribution: in-tree `-Z` = correctness-preserving slice on bins (1.38× median); cross-crate effect lives in userspace cargo-slicer's RUSTC_WRAPPER orchestration |
 | V2  | "rustc binary" row in benchmark table is misleading    | **Done**                | P2: row relabeled "rustc workspace (67 crates)" in `docs/upstream-rfc.md` (§Problem Statement) |
 | V3  | Reuse `reachable_set` instead of re-implementing seeds | **Done**                | P3: `collect_seeds` now seeds from `tcx.reachable_set(())`; manual extern-indicator scan removed |
 | V4  | `build_extern_call_graph` is unnecessary               | **Done**                | P4: extern call graph + helpers deleted (~70 lines); local MIR scan + `reachable_set` covers it |
@@ -70,54 +102,86 @@ so BFS can only *add* items. We compiled stage1 with
 **Result on ripgrep**: stage1 + debug-assertions + flag → no ICE, 904 fns
 eliminated, binary correct. The invariant holds.
 
-### 3. ASE 2026 corpus sweep (top 2,669 crates by downloads)
+### 3. ASE 2026 corpus sweep — split by crate kind
 
-Goal: independent third-party validation of the userspace cargo-slicer
-(which uses the same algorithm as the in-tree patch) on a representative
-slice of the ecosystem. Canonical corpus reference (full catalog with
-rank, version, downloads, build times, and slicer status):
-<https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>
-(raw CSV: `docs/ase2026-corpus.csv`).
+Per V10/V11 reframing: the in-tree `-Z dead-fn-elimination` flag is a no-op
+on libraries (V1 early-return), so library numbers cannot be folded into a
+single headline alongside binary numbers. We report two separate sweeps from
+the same corpus run (`docs/ase2026-corpus.csv`,
+<https://yijunyu.github.io/cargo-slicer/ase2026-corpus.html>):
 
-| Metric                           | Value |
-|----------------------------------|------:|
-| Crates fetched                   | 2,669 |
-| Tarball/extract errors           | 10    |
-| Crates that ran                  | 2,603 |
-| Library crates                   | 2,538 |
-| Binary crates                    | 65    |
-| Both legs built (clean compare)  | **2,452** |
-| Baseline-only failures           | 151   |
-| **Slicer-only regressions**      | **0** |
-| Median build speedup             | **1.50×** |
-| Mean build speedup               | 3.96× |
-| % speedup ≥ 1.0×                 | 73.1% |
-| % speedup ≥ 1.5×                 | 49.8% |
-| % speedup ≥ 2.0×                 | 35.9% |
-| 10th percentile                  | 0.65× |
-| 90th percentile                  | 7.41× |
+#### 3a. Binary subset (n=65) — relevant to the in-tree `-Z` flag
 
-**Headline**: out of 2,452 crates that built cleanly under both legs, the
-slicer leg produced **zero correctness regressions** — every crate the
-baseline could build, the slicer could also build, and (for binaries)
-`--version` / `--help` smoke matched. Median wall-time speedup is 1.50×.
+| Metric                                  | Value |
+|-----------------------------------------|------:|
+| Binary crates attempted                 | 65    |
+| Both legs built (clean compare)         | **59** |
+| Baseline-only failures                  | 6     |
+| **Slicer-only failures**                | **0** |
+| Median build speedup                    | **1.38×** |
+| Mean build speedup                      | 2.45× |
+| % speedup ≥ 1.0×                        | 69.5% |
+| % speedup ≥ 1.5×                        | 45.8% |
+| % speedup ≥ 2.0×                        | 27.1% |
+| 10th percentile                         | 0.67× |
+| 90th percentile                         | 3.58× |
+| Slowest case (`remove_dir_all` 1.0.0)   | 0.43× |
+| Fastest case (`weezl` 0.1.12)           | 29.15× |
 
-The mean is heavily skewed by a long tail (max 190.4×) which corresponds to
-crates whose baseline includes a slow-compiling derive macro that the slicer
-short-circuits via the address-taken closure. The median is the honest number.
+**On binaries the slicer-leg never failed when baseline succeeded** (0/59
+correctness regressions; `--version` / `--help` smoke matched on every
+both-built case). Median wall-time speedup is 1.38× — modest, consistent
+with V11's observation that single-crate elimination overlaps heavily with
+existing pipeline behavior. The 30.5% of bins where the slicer leg is
+slower than baseline is dominated by crates whose total build is small
+enough that pre-analysis overhead dominates (see slowest five in
+`docs/ase2026-corpus.csv`).
+
+#### 3b. Library subset (n=2,538) — userspace cargo-slicer only, NOT the `-Z` flag
+
+This subset is included as a zero-regression stress-test of the userspace
+tool's RUSTC_WRAPPER pipeline, **not** as a claim about
+`-Z dead-fn-elimination`. The userspace tool computes seeds across the
+whole dependency tree (V11) and does run on libraries (V10-style behavior).
+
+| Metric                                  | Value |
+|-----------------------------------------|------:|
+| Library crates attempted                | 2,538 |
+| Both legs built (clean compare)         | **2,393** |
+| Baseline-only failures                  | 145   |
+| **Slicer-only failures**                | **0** |
+| Median build speedup (userspace tool)   | 1.50× |
+| Mean build speedup (userspace tool)     | 3.99× |
+
+The library median (1.50×) is **not** a claim about the in-tree flag. It
+is a measurement of the userspace cross-crate orchestration that V11
+correctly identifies as where the algorithm earns its keep.
 
 ### 4. What's *not* claimed
 
-- **No claim** of speedup on library crates — the V1 early-return makes
-  the flag a no-op there. The sweep includes 2,538 libs to demonstrate
-  *zero regressions*, not speedup.
-- **No claim** of cross-crate wins from the in-tree patch. P4 deleted
-  `build_extern_call_graph`; the cross-crate effect now comes entirely
-  from per-leaf-crate elimination, summed across the workspace. The "zed
-  -31%" / "rustc -48%" numbers in the v2 row of the RFC table predate P4
-  and should be re-measured before stabilization (deferred — see below).
-- **No claim** of vtable-method-level pruning (V6a). All impls of any
-  trait used as `dyn Trait` remain conservatively kept.
+- **Single-crate `-Z` speedup on libraries** — V1 early-return makes the
+  flag a no-op there. Lifting that early-return (V10) is tracked as
+  future-work; we did *not* benchmark a "library `-Z`" leg.
+- **Cross-crate wins from the in-tree patch alone**. P4 deleted
+  `build_extern_call_graph`; whatever cross-crate effect remains is what
+  bleeds through per-leaf-crate elimination + monomorphization + LLVM DCE.
+  The earlier "zed -31%" / "rustc -48%" numbers in the v2 row of the RFC
+  table predate P4 and need re-measurement (deferred).
+- **Vtable-method-level pruning** (V6a). All impls of any trait used as
+  `dyn Trait` remain conservatively kept.
+
+### What *is* still claimed
+
+- **Correctness**: across 59 binary crates that built under both legs, zero
+  slicer-leg failures, `--version`/`--help` matched. The patched stage1
+  oracle (§1) and the `reachable_set ⊆ post_bfs` invariant (§2) provide
+  in-compiler evidence on top of the corpus.
+- **Modest single-crate speedup on binaries**: 1.38× median, with the
+  honest caveat that this is the slice of the cross-crate effect that
+  survives monomorphization + LLVM DCE.
+- **Patch hygiene**: V1–V9 caught three real bugs (`trimmed_def_paths`
+  ICE, library overhead, `is_codegened_item` clone) and shrank the pass
+  from ~419 to ~340 lines.
 
 ---
 
@@ -125,6 +189,8 @@ short-circuits via the address-taken closure. The median is the honest number.
 
 | Item | Why deferred |
 |------|--------------|
+| **Library `rlib` mode (V10)** | Lift V1 early-return; seeds = `reachable_set` already gives correct roots for libs (`pub` API + `#[no_mangle]` + inline/generic items). Needs UI tests + a benchmarking pass distinct from the binary leg before it's defensible. |
+| **Cross-crate orchestration upstream (V11)** | The single-crate `-Z` flag captures only the slice of cross-crate dead code that survives mono + LLVM DCE. A proper upstream answer would thread a global call graph into per-crate compilation (cargo-level mechanism), which is a separate RFC. |
 | Per-method vtable pruning (V6a) | Needs post-mono query; mirrors `reachable.rs` FIXME |
 | `cdylib` / `staticlib` mode (V1 future-work) | Needs user-supplied "exported symbols" list |
 | Coroutine / `gen` block exclusion (R3) | One-line addition; UI test pending |

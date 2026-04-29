@@ -116,33 +116,40 @@ debug_assert holds — no ICE, binary correct under the seed-set invariant.
 
 ### ASE 2026 corpus sweep — top 2,669 crates by downloads
 
-Independent third-party correctness validation of the userspace cargo-slicer
-(same algorithm as the in-tree patch) on a representative slice of the
-ecosystem. Run via `scripts/bench_ase_corpus.sh`; library crates gated on
-build success, binary crates additionally smoke-tested with `--version` /
-`--help`.
+Correctness validation on a representative slice of the ecosystem. Run via
+`scripts/bench_ase_corpus.sh`; library crates gated on build success, binary
+crates additionally smoke-tested with `--version` / `--help`.
 
-| Metric                           | Value |
-|----------------------------------|------:|
-| Crates fetched                   | 2,669 |
-| Crates that ran                  | 2,603 |
-| Both legs built (clean compare)  | **2,452** |
-| **Slicer-only regressions**      | **0** |
-| Median build speedup             | **1.50×** |
-| % speedup ≥ 1.0×                 | 73.1% |
-| % speedup ≥ 1.5×                 | 49.8% |
-| % speedup ≥ 2.0×                 | 35.9% |
+> **V10/V11 reframing (2026-04-29)**: numbers split by crate kind. The
+> in-tree `-Z dead-fn-elimination` flag is a no-op on libraries today (V1
+> early-return); the userspace `cargo-slicer` tool's RUSTC_WRAPPER pipeline
+> does run on libraries. They are reported separately to keep the in-tree
+> claim honest.
 
-**Headline**: out of 2,452 crates that built cleanly under both legs, the
-slicer leg produced **zero correctness regressions** and a 1.50× median
-build speedup. The mean (3.96×) is heavily skewed by a long tail (max
-190.4×); the median is the honest number.
+**Binary subset (n=65) — relevant to in-tree `-Z dead-fn-elimination`**:
+
+| Metric                                  | Value |
+|-----------------------------------------|------:|
+| Binary crates attempted                 | 65    |
+| Both legs built                         | **59** |
+| **Slicer-only failures**                | **0** |
+| Median build speedup                    | **1.38×** |
+| Mean build speedup                      | 2.45× |
+| % speedup ≥ 1.0×                        | 69.5% |
+| % speedup ≥ 1.5×                        | 45.8% |
+| % speedup ≥ 2.0×                        | 27.1% |
+
+**Library subset (n=2,538) — userspace cargo-slicer only, NOT the `-Z`
+flag**: 2,393 of 2,538 libraries built under both legs with **zero
+slicer-only failures**; userspace median 1.50×. This number measures
+cross-crate orchestration in the userspace tool, not the single-crate
+in-tree flag.
 
 Full corpus catalog (all 2,669 crates with rank, version, downloads, build
 times, and slicer status): [ASE 2026 Corpus](ase2026-corpus.md)
 · [CSV](https://github.com/yijunyu/cargo-slicer/blob/main/docs/ase2026-corpus.csv).
 
-Full point-by-point response to the @petrochenkov V1–V9 review and
+Full point-by-point response to the @petrochenkov V1–V11 review and
 reproduction instructions live in [`vadim-response-results.md`][vadim-results]
 on the cargo-slicer repository.
 

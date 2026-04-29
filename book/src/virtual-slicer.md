@@ -121,14 +121,16 @@ applying the patches:
   (V7, V8a, V8b).
 - Net effect on `dead_fn_elim.rs`: **~419 → ~340 lines**.
 
-**Empirical answer to V9** ("will it converge to `reachable_set`?"): on a
-2,669-crate [ASE 2026 corpus sweep](ase2026-corpus.md), the userspace
-slicer (same algorithm) produced **zero correctness regressions** across
-2,452 cleanly-built crates and a **1.50× median build speedup**. The
+**Empirical answer to V9** ("will it converge to `reachable_set`?"): on
+the [ASE 2026 corpus sweep](ase2026-corpus.md), reported separately by
+crate kind per V10/V11. **Binary subset (n=65)**: 59/65 built under both
+legs, **zero slicer-only failures**, **median 1.38× speedup**. **Library
+subset** (userspace tool only — in-tree flag is a no-op there today):
+2,393/2,538 built, zero slicer-only failures, userspace median 1.50×. The
 patched stage1 oracle on `rust-1.90.0` eliminated **904 functions** on
 ripgrep with binary output identical to the baseline.
 
-Full point-by-point response: [`vadim-response-results.md`][vadim-results].
+Full point-by-point response (V1–V11): [`vadim-response-results.md`][vadim-results].
 
 [vadim-review]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-petrochenkov-review-feedback.md
 [vadim-results]: https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-response-results.md

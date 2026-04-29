@@ -9,6 +9,18 @@ README sections that mention "the ASE 2026 corpus sweep" link here.
 
 ## Headline numbers
 
+> **Note (2026-04-29 reframing).** Per follow-up review V10/V11 from
+> @petrochenkov, speedup numbers are split by crate kind. The in-tree
+> `-Z dead-fn-elimination` flag is a no-op on libraries today (early-return
+> when `entry_fn().is_none()`), so library numbers cannot be folded into a
+> single headline alongside binary numbers. The userspace `cargo-slicer`
+> tool's RUSTC_WRAPPER pipeline does run on libraries, and its numbers are
+> reported separately below. See
+> [`docs/vadim-response-results.md`](https://github.com/yijunyu/cargo-slicer/blob/main/docs/vadim-response-results.md)
+> for the full V10/V11 discussion.
+
+### Corpus shape (single sweep, both legs)
+
 | Metric                           | Value |
 |----------------------------------|------:|
 | Crates fetched                   | 2,669 |
@@ -18,14 +30,44 @@ README sections that mention "the ASE 2026 corpus sweep" link here.
 | Binary crates                    | 65    |
 | Both legs built (clean compare)  | **2,452** |
 | Baseline-only failures           | 151   |
-| **Slicer-only regressions**      | **0** |
-| Median build speedup             | **1.50×** |
-| Mean build speedup               | 3.96×  |
-| % speedup ≥ 1.0×                 | 73.1% |
-| % speedup ≥ 1.5×                 | 49.8% |
-| % speedup ≥ 2.0×                 | 35.9% |
-| 10th percentile                  | 0.65× |
-| 90th percentile                  | 7.41× |
+| **Slicer-only correctness regressions** | **0** |
+
+Across the full corpus the slicer leg never failed when the baseline
+succeeded — this correctness statement holds for both kinds.
+
+### Binary subset (n=65) — relevant to in-tree `-Z dead-fn-elimination`
+
+| Metric                                  | Value |
+|-----------------------------------------|------:|
+| Binary crates attempted                 | 65    |
+| Both legs built                         | **59** |
+| Baseline-only failures                  | 6     |
+| **Slicer-only failures**                | **0** |
+| Median build speedup                    | **1.38×** |
+| Mean build speedup                      | 2.45× |
+| % speedup ≥ 1.0×                        | 69.5% |
+| % speedup ≥ 1.5×                        | 45.8% |
+| % speedup ≥ 2.0×                        | 27.1% |
+| 10th percentile                         | 0.67× |
+| 90th percentile                         | 3.58× |
+
+### Library subset (n=2,538) — userspace cargo-slicer only, NOT the `-Z` flag
+
+| Metric                                  | Value |
+|-----------------------------------------|------:|
+| Library crates attempted                | 2,538 |
+| Both legs built                         | **2,393** |
+| Baseline-only failures                  | 145   |
+| **Slicer-only failures**                | **0** |
+| Median build speedup (userspace tool)   | 1.50× |
+| Mean build speedup (userspace tool)     | 3.99× |
+| 10th percentile                         | 0.65× |
+| 90th percentile                         | 7.42× |
+
+The library median is **not** a claim about `-Z dead-fn-elimination`. It
+is a measurement of cross-crate orchestration in the userspace tool, which
+is where (per V11) the algorithm actually earns its keep — single-crate
+elimination overlaps heavily with `-Wunused` + monomorphization + LLVM DCE.
 
 ## Speedup distribution
 
