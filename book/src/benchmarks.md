@@ -37,8 +37,8 @@ Apr 2026, 2–3 runs per mode.
 | **nushell** (41 local crates) | 103 s | 82 s | **1.26×** | |
 
 > **Retracted claims**: nushell was reported at **5.1×** — apples-to-oranges
-> RUSTFLAGS mismatch; honest speedup is 1.26×. cargo-slicer (self) was
-> claimed at 1.74× but re-verified at 1.00× (only 1 driver crate, 0 stubs).
+> RUSTFLAGS mismatch; re-measured speedup is 1.26×. cargo-slicer (self)
+> was claimed at 1.74× but re-verified at 1.00× (only 1 driver crate, 0 stubs).
 
 ## Docker benchmarks (`docker run cargo-slicer bench`)
 
@@ -123,8 +123,8 @@ crates additionally smoke-tested with `--version` / `--help`.
 > **V10/V11 reframing (2026-04-29)**: numbers split by crate kind. The
 > in-tree `-Z dead-fn-elimination` flag is a no-op on libraries today (V1
 > early-return); the userspace `cargo-slicer` tool's RUSTC_WRAPPER pipeline
-> does run on libraries. They are reported separately to keep the in-tree
-> claim honest.
+> does run on libraries. They are reported separately so the in-tree claim
+> applies only to the binaries it actually runs on.
 
 **Binary subset (n=65) — relevant to in-tree `-Z dead-fn-elimination`**:
 

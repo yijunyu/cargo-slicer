@@ -177,8 +177,8 @@ correctly identifies as where the algorithm earns its keep.
   oracle (§1) and the `reachable_set ⊆ post_bfs` invariant (§2) provide
   in-compiler evidence on top of the corpus.
 - **Modest single-crate speedup on binaries**: 1.38× median, with the
-  honest caveat that this is the slice of the cross-crate effect that
-  survives monomorphization + LLVM DCE.
+  caveat that this is the slice of the cross-crate effect that survives
+  monomorphization + LLVM DCE.
 - **Patch hygiene**: V1–V9 caught three real bugs (`trimmed_def_paths`
   ICE, library overhead, `is_codegened_item` clone) and shrank the pass
   from ~419 to ~340 lines.
