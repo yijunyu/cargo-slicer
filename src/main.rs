@@ -247,10 +247,16 @@ fn run_script(script_args: &[String]) -> ! {
     } else if let Some(d) = &dispatch {
         cmd.env("RUSTC_WRAPPER", d);
     } else {
-        eprintln!(
-            "cargo-slicer script: cargo_slicer_dispatch not found in PATH \
-             and the active nightly does not support -Zdead-fn-elimination."
-        );
+        eprintln!("cargo-slicer script: no fast path available.\n");
+        eprintln!("  Neither of these was found:");
+        eprintln!("    1. `cargo_slicer_dispatch` on PATH (the RUSTC_WRAPPER driver), or");
+        eprintln!("    2. `-Z dead-fn-elimination` support in the active nightly rustc.");
+        eprintln!();
+        eprintln!("  Install with:");
+        eprintln!("    curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install-script.sh | bash");
+        eprintln!();
+        eprintln!("  Or verify your setup with:");
+        eprintln!("    cargo-slicer script --check");
         std::process::exit(1);
     }
 
@@ -293,6 +299,75 @@ fn rustc_supports_dead_fn_elim() -> bool {
             s.contains("dead-fn-elimination") || e.contains("dead-fn-elimination")
         }
         Err(_) => false,
+    }
+}
+
+/// Diagnose whether `cargo-slicer script` is ready to run.
+/// Returns 0 if at least one fast path is wired up, 1 otherwise.
+fn script_health_check() -> i32 {
+    println!("cargo-slicer script — environment check\n");
+
+    // 1. nightly toolchain
+    let nightly_ok = std::process::Command::new("rustup")
+        .args(["run", "nightly", "rustc", "--version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if nightly_ok {
+        let v = std::process::Command::new("rustup")
+            .args(["run", "nightly", "rustc", "--version"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        println!("  [ok] nightly toolchain: {}", v);
+    } else {
+        println!("  [missing] nightly toolchain (install with: rustup toolchain install nightly)");
+    }
+
+    // 2. cargo -Zscript support (probe by running --help — script flag listed under -Z help)
+    let zscript_ok = std::process::Command::new("cargo")
+        .args(["+nightly", "-Zhelp"])
+        .output()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let e = String::from_utf8_lossy(&o.stderr);
+            s.contains("script") || e.contains("script")
+        })
+        .unwrap_or(false);
+    if zscript_ok {
+        println!("  [ok] cargo -Zscript available");
+    } else {
+        println!("  [warn] cargo -Zscript not detected (your nightly may be too old)");
+    }
+
+    // 3. -Z dead-fn-elimination (Fast Path 3)
+    let zflag = rustc_supports_dead_fn_elim();
+    if zflag {
+        println!("  [ok] rustc -Z dead-fn-elimination available (Fast Path 3: no driver needed)");
+    } else {
+        println!("  [info] rustc -Z dead-fn-elimination not available (will use RUSTC_WRAPPER fallback)");
+    }
+
+    // 4. cargo_slicer_dispatch (RUSTC_WRAPPER driver)
+    let dispatch = locate_sibling_bin("cargo_slicer_dispatch");
+    match &dispatch {
+        Some(p) => println!("  [ok] cargo_slicer_dispatch: {}", p.display()),
+        None => println!("  [missing] cargo_slicer_dispatch not found on PATH"),
+    }
+
+    println!();
+
+    if zflag || dispatch.is_some() {
+        println!("Ready. Try:");
+        println!("  cargo-slicer script hello.rs");
+        0
+    } else {
+        println!("Not ready: need either `-Z dead-fn-elimination` in nightly rustc,");
+        println!("or `cargo_slicer_dispatch` on PATH.");
+        println!();
+        println!("Install with:");
+        println!("  curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install-script.sh | bash");
+        1
     }
 }
 
@@ -358,6 +433,8 @@ fn print_usage() {
     eprintln!("cargo-script (nightly -Zscript):");
     eprintln!("  script <file.rs> [args...]   Run a single-file Rust script with slicer enabled.");
     eprintln!("                                Shebang: #!/usr/bin/env -S cargo-slicer script");
+    eprintln!("  script --check               Diagnose whether the script subcommand is ready");
+    eprintln!("                                (nightly + -Zscript + dispatcher / -Zdead-fn-elimination).");
     eprintln!();
     eprintln!("RL Training KPI Benchmark:");
     eprintln!("  rl-bench           Measure compile speedup as RL training throughput KPIs");
@@ -922,11 +999,16 @@ pub fn main() {
             "script" => {
                 // cargo-script (nightly -Zscript) with cargo-slicer enabled.
                 // Usage: cargo-slicer script <file.rs> [script-args...]
+                //        cargo-slicer script --check         (health-check)
                 // Shebang: #!/usr/bin/env -S cargo-slicer script
                 let script_args: Vec<String> = args[i + 1..].to_vec();
                 if script_args.is_empty() {
                     eprintln!("Usage: cargo-slicer script <file.rs> [args...]");
+                    eprintln!("       cargo-slicer script --check");
                     std::process::exit(2);
+                }
+                if script_args[0] == "--check" {
+                    std::process::exit(script_health_check());
                 }
                 run_script(&script_args);
             }

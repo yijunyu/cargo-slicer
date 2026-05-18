@@ -68,7 +68,24 @@ cargo-slicer pre-analyze --parser ctags # items only, no call edges
 ## cargo-script (nightly `-Zscript`)
 
 Run a single-file Rust script (cargo's nightly `-Zscript` feature) with
-cargo-slicer enabled. The only user-visible change is the shebang line:
+cargo-slicer enabled.
+
+### Quick install (script subcommand only)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yijunyu/cargo-slicer/main/install-script.sh | bash
+```
+
+This installs only the two binaries the `script` subcommand needs
+(`cargo-slicer` + `cargo_slicer_dispatch`, ~5 MB total). It skips the
+warmup cache, clang-daemon, and the nightly rustc-driver build that the
+full `install.sh` would set up.
+
+After install, run `cargo-slicer script --check` to verify the setup.
+
+### Usage
+
+The only user-visible change is the shebang line:
 
 ```rust
 #!/usr/bin/env -S cargo-slicer script
