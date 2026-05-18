@@ -216,13 +216,22 @@ export CARGO_SLICER_VIRTUAL=1
 export CARGO_SLICER_CODEGEN_FILTER=1
 export CARGO_SLICER_DRIVER="$DRIVER"
 
-if [[ -n "$WARMUP_PCH" && -n "$_PLAN_FILE" && -f "$_PLAN_FILE" ]]; then
+# Only engage cargo_warmup_dispatch if the warmup cache was actually initialized
+# (via cargo-warmup CLI). Otherwise stale/foreign entries from prior toolchains
+# can cause cross-crate metadata mismatches (E0463). Without the CLI available
+# there's also no way to (re-)initialize, so fall through to slicer-only.
+_WARMUP_USABLE=""
+if [[ -n "$WARMUP_DISPATCH" && -n "$WARMUP_CLI" && -f "$HOME/.cargo/warmup-cache/.initialized" ]]; then
+    _WARMUP_USABLE=1
+fi
+
+if [[ -n "$WARMUP_PCH" && -n "$_WARMUP_USABLE" && -n "$_PLAN_FILE" && -f "$_PLAN_FILE" ]]; then
     # Full three-layer chain
     export RUSTC_WRAPPER="$WARMUP_PCH"
     export CARGO_WARMUP_PLAN="$_PLAN_FILE"
     export CARGO_WARMUP_INNER_WRAPPER="$WARMUP_DISPATCH"
     export CARGO_WARMUP_INNER_WRAPPER2="$DISPATCH"
-elif [[ -n "$WARMUP_DISPATCH" ]]; then
+elif [[ -n "$_WARMUP_USABLE" ]]; then
     # No pch priority, but warmup + slicer
     export RUSTC_WRAPPER="$WARMUP_DISPATCH"
     export CARGO_WARMUP_INNER_WRAPPER="$DISPATCH"
