@@ -48,6 +48,7 @@ CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \
 | `build [ARGS]` | Slice deps then build with sliced crates |
 | `pre-analyze [--parser BACKEND]` | Cross-crate static analysis for virtual slicing |
 | `generate [-o DIR] [--delete]` | Write a sliced source copy without modifying the original |
+| `script <file.rs> [args...]` | Run a nightly `-Zscript` single-file Rust script with slicing enabled |
 | `rl-bench [OPTIONS]` | Measure compile speedup as RL training KPIs |
 
 ## Pre-analysis parser backends
@@ -63,6 +64,59 @@ cargo-slicer pre-analyze --parser ctags # items only, no call edges
 | `syn` | 0.5–12 s | Yes, accurate | Default — best stubs |
 | `fast` | < 1 s | Yes, approximate | Large workspaces, time-sensitive |
 | `ctags` | Fastest | None | Items-only analysis |
+
+## cargo-script (nightly `-Zscript`)
+
+Run a single-file Rust script (cargo's nightly `-Zscript` feature) with
+cargo-slicer enabled. The only user-visible change is the shebang line:
+
+```rust
+#!/usr/bin/env -S cargo-slicer script
+---cargo
+[dependencies]
+regex = "1"
+---
+
+fn main() {
+    let re = regex::Regex::new(r"\w+").unwrap();
+    println!("{:?}", re.find("hello world"));
+}
+```
+
+Make it executable and run it directly:
+
+```bash
+chmod +x hello.rs
+./hello.rs
+```
+
+Or invoke explicitly:
+
+```bash
+cargo-slicer script hello.rs [args...]
+```
+
+### What it does
+
+1. Sets `CARGO_SLICER_VIRTUAL=1`, `CARGO_SLICER_CODEGEN_FILTER=1`, and
+   `CARGO_SLICER_CACHE_DIR=$TMPDIR/cargo-slicer-script-<hash>` (keyed by the
+   absolute script path, so caches don't litter the user's cwd).
+2. Detects whether the active nightly already has `-Z dead-fn-elimination`
+   (the in-tree patch). If so, it skips `RUSTC_WRAPPER` and passes the flag
+   via `CARGO_ENCODED_RUSTFLAGS` (Fast Path 3). Otherwise it sets
+   `RUSTC_WRAPPER=cargo_slicer_dispatch` and uses the userspace driver.
+3. `exec`s `cargo +nightly -Zscript <file> [args...]`.
+
+### Caveats
+
+- `-Zscript` is unstable and only available on nightly.
+- For tiny single-file scripts the slicer's contribution is mostly eliminating
+  dead code in registry dependencies (the userspace driver path skips the
+  one-crate script body by the auto skip-threshold heuristic). The
+  `-Z dead-fn-elimination` fast path applies to both.
+- No pre-analysis step runs — there's no workspace `Cargo.toml` to walk.
+  The in-tree flag does its own BFS from the script's `main()`, so this is
+  fine for the upstream-flag path.
 
 ## Source slicing (stable, no nightly)
 
