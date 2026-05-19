@@ -225,11 +225,21 @@ fn run_script(script_args: &[String]) -> ! {
     let cache_dir = tmp_root.join(format!("cargo-slicer-script-{}", key));
     let _ = std::fs::create_dir_all(&cache_dir);
 
+    // cargo +nightly -Zscript warns when the `---cargo` frontmatter omits an
+    // edition. Materialize a patched copy in the cache dir with edition=2024
+    // injected (latest stable edition as of 2026) if the user didn't specify
+    // one. The patched copy is what we hand to cargo, but cargo-script reads
+    // the *file path* for its package name, so we keep the script's basename.
+    let script_to_run = match script_with_edition(&script_path, &cache_dir) {
+        Some(p) => p,
+        None => script_path.clone(),
+    };
+
     // Detect upstream `-Z dead-fn-elimination` support (Fast Path 3).
     let has_zflag = rustc_supports_dead_fn_elim();
 
     let mut cmd = Command::new("cargo");
-    cmd.arg("+nightly").arg("-Zscript").arg(&script_path);
+    cmd.arg("+nightly").arg("-Zscript").arg(&script_to_run);
     for a in forwarded {
         cmd.arg(a);
     }
@@ -379,6 +389,103 @@ fn path_hash_hex(bytes: &[u8]) -> String {
         h = h.wrapping_mul(0x100000001b3);
     }
     format!("{:016x}", h)
+}
+
+/// If the script's `---cargo` frontmatter omits an edition, write a patched
+/// copy alongside the cache dir with `edition = "2024"` injected under
+/// `[package]` (creating that section if needed). Returns the path to the
+/// patched copy, or `None` if no change was needed.
+///
+/// We use 2024 as the default edition since cargo-slicer requires nightly
+/// (where 2024 is stable since 1.85).
+fn script_with_edition(script_path: &Path, cache_dir: &Path) -> Option<PathBuf> {
+    let src = fs::read_to_string(script_path).ok()?;
+    let (frontmatter_range, frontmatter) = extract_cargo_frontmatter(&src)?;
+
+    // Already has an edition key? Leave the script alone.
+    if frontmatter
+        .lines()
+        .any(|l| l.trim_start().starts_with("edition"))
+    {
+        return None;
+    }
+
+    let patched_frontmatter = inject_edition(frontmatter, "2024");
+    let mut patched = String::with_capacity(src.len() + 32);
+    patched.push_str(&src[..frontmatter_range.0]);
+    patched.push_str(&patched_frontmatter);
+    patched.push_str(&src[frontmatter_range.1..]);
+
+    let name = script_path.file_name()?;
+    let out = cache_dir.join(name);
+    fs::write(&out, patched).ok()?;
+    Some(out)
+}
+
+/// Locate the `---cargo` ... `---` block in a single-file Rust script.
+/// Returns ((start, end), inner_text) where start..end is the byte range of
+/// the frontmatter body (excluding the fence lines).
+fn extract_cargo_frontmatter(src: &str) -> Option<((usize, usize), &str)> {
+    // cargo-script frontmatter rules: the file begins with an optional shebang,
+    // then a line starting with `---` and ending the line, possibly with an
+    // info string like "cargo". Skip the shebang line if present.
+    let mut cursor = 0;
+    if src.starts_with("#!") {
+        cursor = src.find('\n').map(|n| n + 1).unwrap_or(src.len());
+    }
+    // Skip blank lines.
+    while let Some(nl) = src[cursor..].find('\n') {
+        if src[cursor..cursor + nl].trim().is_empty() {
+            cursor += nl + 1;
+        } else {
+            break;
+        }
+    }
+
+    let rest = &src[cursor..];
+    let first_line_end = rest.find('\n')?;
+    let first_line = rest[..first_line_end].trim_end();
+    if !first_line.starts_with("---") {
+        return None;
+    }
+    // After the opening fence: find the closing `---` on its own line.
+    let body_start = cursor + first_line_end + 1;
+    let after_open = &src[body_start..];
+    let close_idx = after_open
+        .lines()
+        .scan(0usize, |acc, line| {
+            let start = *acc;
+            *acc += line.len() + 1;
+            Some((start, line))
+        })
+        .find(|(_, l)| l.trim() == "---")
+        .map(|(s, _)| body_start + s)?;
+    Some(((body_start, close_idx), &src[body_start..close_idx]))
+}
+
+/// Insert `edition = "<ed>"` into a Cargo frontmatter body.
+/// If a `[package]` section exists, insert immediately under it; otherwise
+/// prepend a fresh `[package]` block.
+fn inject_edition(body: &str, edition: &str) -> String {
+    let line = format!("edition = \"{}\"\n", edition);
+    if let Some(idx) = body.find("[package]") {
+        // Insert on the line immediately after `[package]`.
+        let after_header = body[idx..].find('\n').map(|n| idx + n + 1).unwrap_or(body.len());
+        let mut out = String::with_capacity(body.len() + line.len());
+        out.push_str(&body[..after_header]);
+        out.push_str(&line);
+        out.push_str(&body[after_header..]);
+        out
+    } else {
+        let mut out = String::with_capacity(body.len() + line.len() + 16);
+        out.push_str("[package]\n");
+        out.push_str(&line);
+        if !body.starts_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(body);
+        out
+    }
 }
 
 fn print_usage() {
@@ -635,6 +742,18 @@ pub fn main() {
 
     // Passthrough args for cargo build (e.g., --release, --features foo)
     let mut passthrough_args: Vec<String> = Vec::new();
+
+    // Implicit script form: when the first arg is a path to a .rs file, route
+    // to the script subcommand. This lets users write a single-binary shebang
+    //     #!/usr/bin/env cargo-slicer
+    // instead of the longer  `#!/usr/bin/env -S cargo-slicer script`.
+    if args.len() >= 2 {
+        let a = &args[1];
+        if a.ends_with(".rs") && Path::new(a).is_file() {
+            let script_args: Vec<String> = args[1..].to_vec();
+            run_script(&script_args);
+        }
+    }
 
     let mut i = 1;
     while i < args.len() {

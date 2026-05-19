@@ -85,10 +85,11 @@ After install, run `cargo-slicer script --check` to verify the setup.
 
 ### Usage
 
-The only user-visible change is the shebang line:
+The shebang line is the only thing that distinguishes a cargo-slicer script
+from a plain cargo-script:
 
 ```rust
-#!/usr/bin/env -S cargo-slicer script
+#!/usr/bin/env cargo-slicer
 ---cargo
 [dependencies]
 regex = "1"
@@ -110,19 +111,28 @@ chmod +x hello.rs
 Or invoke explicitly:
 
 ```bash
+cargo-slicer hello.rs [args...]
+# or, equivalent, with the explicit subcommand form:
 cargo-slicer script hello.rs [args...]
 ```
+
+When `cargo-slicer`'s first argument is an existing `.rs` file, it routes
+to the script subcommand automatically — so the shebang stays as short as
+a plain cargo-script shebang.
 
 ### What it does
 
 1. Sets `CARGO_SLICER_VIRTUAL=1`, `CARGO_SLICER_CODEGEN_FILTER=1`, and
    `CARGO_SLICER_CACHE_DIR=$TMPDIR/cargo-slicer-script-<hash>` (keyed by the
    absolute script path, so caches don't litter the user's cwd).
-2. Detects whether the active nightly already has `-Z dead-fn-elimination`
+2. If the script's `---cargo` frontmatter omits `edition = "..."`, writes a
+   patched copy into the cache dir with `edition = "2024"` injected so
+   cargo-script doesn't emit the "no edition" warning.
+3. Detects whether the active nightly already has `-Z dead-fn-elimination`
    (the in-tree patch). If so, it skips `RUSTC_WRAPPER` and passes the flag
    via `CARGO_ENCODED_RUSTFLAGS` (Fast Path 3). Otherwise it sets
    `RUSTC_WRAPPER=cargo_slicer_dispatch` and uses the userspace driver.
-3. `exec`s `cargo +nightly -Zscript <file> [args...]`.
+4. `exec`s `cargo +nightly -Zscript <file> [args...]`.
 
 ### Caveats
 
