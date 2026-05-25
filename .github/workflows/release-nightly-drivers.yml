@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -71,7 +71,7 @@ jobs:
           echo "Building bundle: $ASSET"
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -80,7 +80,7 @@ jobs:
           restore-keys: bundle-registry-${{ runner.os }}-
 
       - name: Clone source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: yijunyu/precc
           ref: componentized
