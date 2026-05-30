@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO="yijunyu/cargo-slicer"
-CARGO_SLICER_VERSION="0.0.8"
+CARGO_SLICER_VERSION="0.0.9"
 INSTALL_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 # C/C++ daemon binaries: installed alongside Rust binaries for unified support
