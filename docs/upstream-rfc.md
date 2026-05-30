@@ -1,6 +1,9 @@
 # MCP: Dead Function Elimination via BFS Reachability (`-Z dead-fn-elimination`)
 
-**Status**: Verified — patched stage1 compiler builds and passes functional + incremental tests (2026-03-12)
+**Status**: Patched stage1 builds and passes functional + incremental tests
+(2026-03-12); `reachable_set ⊆ post-BFS-set` invariant holds on the rust-1.90
+oracle; 59 crates.io binaries built with zero correctness regressions
+(2026-04-29). Algorithm reflects @petrochenkov's V1–V11 review.
 **Tracking issue**: (to be filed)
 **Zulip thread**: (to be opened in `#t-compiler/help`)
 
@@ -176,20 +179,20 @@ Eliminating at the MIR level means LLVM never starts on those functions.
 | "rustc already has dead code elimination" | Only intra-crate DCE (unused warnings). The mono collector seeds all `pub` functions; cross-crate BFS is the gap. |
 | "this breaks incremental compilation" | `UNTRACKED` flag; stub MIR is valid with `Unreachable` terminator. Incremental sees a valid (different) function body. Same as `-Z no-codegen`. |
 | "vtable dispatch will be broken" | `scan_for_vtable_constructions()` tracks `PointerCoercion::Unsize` casts, seeds all methods of any trait used as `dyn Trait`. |
-| "generic functions?" | Check 9: `generics.count() > 0` → never stub. Pre-monomorphization BFS can't know which instantiations are reachable. |
-| "async functions?" | Check 10: `asyncness.is_async()` → never stub. Async fns compile to state machines; stubbing breaks the generator transform. |
-| "Drop implementations?" | Check 5: lang item `drop_trait` comparison → never stub. The compiler inserts drop calls implicitly, outside BFS reach. |
-| "extern C / FFI?" | Check 4: `NO_MANGLE`, `USED_LINKER`, `symbol_name`, `linkage` attrs → never stub. |
-| "pub API in library crates?" | Check 3: `vis.is_public() && !is_binary_crate` → never stub. Downstream consumers may call any pub function. |
+| "generic functions?" | `generics_of(def_id).requires_monomorphization(tcx)` → never eliminate (P6/V6b; matches `reachable.rs::recursively_reachable`). Pre-monomorphization BFS can't know which instantiations are reachable. |
+| "async functions?" | `asyncness.is_async()` → never eliminate (also `DefKind::OpaqueTy` for the return type). Async fns compile to state machines; eliminating breaks the coroutine transform. |
+| "Drop implementations?" | lang item `drop_trait` comparison → never eliminate. The compiler inserts drop calls implicitly, outside BFS reach. |
+| "extern C / FFI?" | `NO_MANGLE`, `USED_LINKER`, `export_name`, `linkage` attrs → never eliminate. |
+| "pub API in library crates?" | The pass early-returns on library crate types (P1/V1); in a binary, `reachable_set` seeding (P3/V3) preserves any `pub` item that needs preserving. No separate `is_public()` branch. |
 | "Why `-Z` and not stable?" | Unstable is the correct starting point. Stabilization path: `-Z` → field validation → `-C` once semantics are proven. |
 | "Why not LLVM?" | LLVM sees one CGU at a time. Cross-CGU reachability requires rustc-level analysis with global `TyCtxt`. |
-| "unsafe functions?" | Check 8: `fn_sig().safety().is_unsafe()` → never stub. Unsafe fns can be called via transmuted function pointers. |
-| "functions passed as fn pointers?" | Check 11: signature contains `FnPtr` or `dyn Trait` → never stub the receiver function. |
+| "unsafe functions?" | The "unsafe fn" ban was dropped (P8a/V8a) — it was a proxy for "might be address-taken". Address-taken tracking (P5a/P5b/V5) is the precise invariant: an unsafe fn coerced to a fn pointer is seeded and kept; one that is never address-taken and is BFS-unreachable is eliminable. |
+| "functions passed as fn pointers?" | Tracked precisely by address-taken seeding (P5a/V5a): `ReifyFnPointer` / `ClosureFnPointer` coercions union the target into the BFS seeds. The earlier `FnPtr`/`dyn`-in-signature walk (Check 11) was dropped (P8b/V8b) as imprecise — it kept callees that merely *accept* a fn pointer rather than the ones actually address-taken. |
 | "@workingjubilee: driver can't maintain borrow-checker guarantees across `optimized_mir` override" | The in-tree implementation uses CGU-level removal (`collect_and_partition_mono_items` override), not body replacement. The function is excluded from the codegen queue entirely — the borrow checker's conclusions about the original body are never contradicted. See `docs/wesley-workingjubilee-review-feedback.md`. |
-| "@oli-obk: is the migration from external driver to rustc feasible?" | Yes — and this MCP is the outcome. The external tool has validated the algorithm since late 2025; the in-tree patch is a direct ~422-line translation using native `TyCtxt` APIs, eliminating IPC overhead, ABI versioning, and disk I/O. See `docs/wesley-workingjubilee-review-feedback.md`. |
+| "@oli-obk: is the migration from external driver to rustc feasible?" | Yes — and this MCP is the outcome. The external tool has validated the algorithm since late 2025; the in-tree patch is a direct ~340-line translation using native `TyCtxt` APIs, eliminating IPC overhead, ABI versioning, and disk I/O. See `docs/wesley-workingjubilee-review-feedback.md`. |
 | "`#[inline]` functions could be eliminated incorrectly" | `#[inline]` does not change reachability — it's a codegen hint. The BFS sees the call edge regardless. Inlined functions are monomorphized at call sites; the original `DefId` body is kept if any call site exists. |
 | "`#[cold]` functions should not be eliminated" | Correct — `#[cold]` is a branch prediction hint, not a reachability signal. BFS treats `#[cold]` functions identically to any other: reachable = keep, unreachable = eliminate. No special handling needed. |
-| "BFS bug could silently eliminate reachable functions" | Conservative 11-point safety checklist: generics, async, unsafe, Drop, `#[no_mangle]`, fn pointers, dyn Trait, pub items → all kept unconditionally. A BFS bug can only affect private, non-generic, non-async, safe, non-Drop standalone functions — the narrowest possible class. Runtime symptom is an `Unreachable` trap (immediate, not silent). |
+| "BFS bug could silently eliminate reachable functions" | Conservative safety checklist (`is_safe_to_eliminate`): generics, async, Drop, `#[no_mangle]`, address-taken, `dyn`-compatible trait methods → all kept unconditionally. A BFS bug can only affect a private, non-generic, non-async, non-Drop, non-address-taken standalone function — the narrowest possible class. Runtime symptom is an `Unreachable` trap (immediate, not silent). |
 | "Use the mono collector instead of pre-mono BFS" | The mono collector operates post-monomorphization on `MonoItem`s (concrete instantiations). This pass operates pre-mono on `DefId`s (source-level functions). Pre-mono BFS is cheaper (fewer nodes, no generic expansion) and catches functions before LLVM even sees them. The two are complementary: BFS removes statically dead `DefId`s; the mono collector handles instantiation-level reachability. |
 
 ---
@@ -216,7 +219,11 @@ incremental caches when toggling the flag, which is unnecessarily conservative.
 
 ### File 2: `compiler/rustc_mir_transform/src/dead_fn_elim.rs` (new file)
 
-Full implementation (~420 lines), including cross-crate BFS:
+Full implementation (~340 lines), **local** BFS only. (An earlier draft
+carried a `build_extern_call_graph` that re-walked extern crates; @petrochenkov's
+V4 review showed it was redundant — `reachable_set` seeding plus address-taken
+seeding already cover the cross-crate surface a single-crate pass can act on —
+so it was deleted. See `docs/vadim-response-results.md`.)
 
 ```rust
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap, FxIndexSet};
@@ -229,35 +236,46 @@ use rustc_span::def_id::DefId;
 
 **Module structure**:
 
-1. **Thread-local state** (`VTABLE_TRAITS`, `ELIMINABLE_DEF_IDS`) — two sets
-   per rustc process. `VTABLE_TRAITS` tracks traits used as `dyn Trait`;
-   `ELIMINABLE_DEF_IDS` stores the final set of functions to exclude from codegen.
+1. **Thread-local state** (`VTABLE_TRAITS`, `ADDRESS_TAKEN`, `ELIMINABLE_DEF_IDS`)
+   — three sets per rustc process. `VTABLE_TRAITS` tracks traits used as
+   `dyn Trait`; `ADDRESS_TAKEN` (V5a/V5b) tracks functions whose address is
+   taken; `ELIMINABLE_DEF_IDS` stores the final set to exclude from codegen.
 
 2. **`run_analysis(tcx: TyCtxt<'_>)`** — called once from `after_analysis`:
-   a. Early return for library crates (`entry_fn().is_none()`)
-   b. `build_call_graph(tcx)` — local + cross-crate edges via `FxIndexMap`
-   c. `collect_seeds(tcx)` — seeds: `entry_fn`, statics, `#[no_mangle]`/`#[used]`,
-      `#[test]`/`#[bench]`, Drop impls, vtable-constructed trait methods
-   d. `run_bfs(seeds, &call_graph)` — pure BFS, deterministic via sorted seeds
-   e. Mark unreachable + safe-to-eliminate functions in `ELIMINABLE_DEF_IDS`
+   a. Early return for library crate types (`entry_fn().is_none()`)
+   b. `build_call_graph(tcx)` — **local** edges from `tcx.mir_keys(())`;
+      scans vtable constructions and address-taken operands in the same MIR walk
+   c. `collect_seeds(tcx)` — seeds anchored on `tcx.reachable_set(())` (V3),
+      plus the binary `entry_fn` and the vtable-constructed methods of
+      `dyn`-compatible traits
+   d. union `ADDRESS_TAKEN` into the seed set, then `run_bfs(seeds, &call_graph)`
+   e. mark unreachable + `is_safe_to_eliminate` functions in `ELIMINABLE_DEF_IDS`
+   f. (`debug_assertions`) assert `reachable_set ⊆ post-BFS-set` (V9 invariant)
 
 3. **`is_eliminable(idx: u64) -> bool`** — O(1) lookup into `ELIMINABLE_DEF_IDS`.
    Called by the `is_codegened_item` query override in the driver.
 
-4. **`is_safe_to_eliminate(tcx, def_id)`** — 11-point safety checklist (see below).
+4. **`is_safe_to_eliminate(tcx, def_id)`** — the safety checklist (see below).
 
-5. **`build_call_graph` / `build_local_call_graph` / `build_extern_call_graph`** —
-   local edges from `tcx.mir_keys()`; cross-crate edges by iterating
-   `tcx.crates(())`, BFS-walking `module_children`, reading `optimized_mir`
-   (guarded by `is_mir_available` + `catch_unwind`). Skips std/core/alloc.
+5. **`build_call_graph(tcx)`** — local edges only, from `tcx.mir_keys(())`,
+   reading each body's call terminators via `add_mir_edges`. No extern-crate
+   walk (deleted in V4).
 
-6. **`scan_for_vtable_constructions(body)`** — walks MIR statements looking
-   for `Rvalue::Cast(PointerCoercion::Unsize, _, dyn Trait)`, records the trait
+6. **`scan_for_vtable_constructions(body)`** — walks MIR for
+   `Rvalue::Cast(PointerCoercion::Unsize, _, dyn Trait)`, records the trait
    DefId in `VTABLE_TRAITS`.
+
+7. **`scan_for_address_taken(body)`** (V5a) and **`scan_inline_asm`** (V5b) —
+   record `ReifyFnPointer` / `ClosureFnPointer` coercions and `InlineAsm`
+   `SymFn` operands in `ADDRESS_TAKEN`, so indirectly-called functions survive
+   BFS even when no direct call edge exists.
 
 **Graph data structures**: `FxIndexMap<u64, FxIndexSet<u64>>` for the call graph
 (deterministic iteration, no `potential_query_instability` lint). `FxHashSet<u64>`
-for membership-only sets (seeds, reachable, vtable traits, eliminable).
+for membership-only sets (seeds, reachable, vtable traits, address-taken,
+eliminable). DefIds are encoded as `u64` keys (`(krate << 32) | index`) rather
+than `def_path_str` — using the string path as a graph key triggered a
+`trimmed_def_paths` ICE in `rustc_errors` (one of three bugs the review caught).
 
 **Why `thread_local!` instead of a new query**:
 
@@ -338,132 +356,80 @@ local functions.
 
 ---
 
-## Safety Proof: The 11-Point `is_safe_to_stub` Checklist
+## Safety conditions: `is_safe_to_eliminate`
 
 The cost of a false negative (keeping an unreachable function) is binary bloat.
-The cost of a false positive (stubbing a reachable function) is a runtime panic.
+The cost of a false positive (eliminating a reachable function) is a runtime
+`Unreachable` trap. The checklist is conservative; when in doubt, keep the
+function.
 
-The checklist is conservative by design. When in doubt, we keep the function.
+This section reflects the post-review checklist. @petrochenkov's review
+(`yijunyu/cargo-slicer#1`, V1–V11) removed four heuristic proxies that earlier
+drafts carried — a `vis.is_public()` library branch, `#[test]`/`#[bench]`
+attribute checks, an "unsafe fn" ban, and a `FnPtr`/`dyn`-in-signature walk —
+and replaced them with two direct invariants: seeding from `reachable_set`
+(V3) and explicit address-taken tracking (V5). The dropped proxies are noted
+below where they used to live.
 
-### Check 1: `def_id.is_local()`
+### Always keep (never eliminate)
 
-**What it detects**: Extern crate functions.
-**Failure mode**: Stubbing a function body we don't own, which would corrupt the
-extern crate's `.rlib` from other compilations' perspective.
-**Example**: `serde::Serialize::serialize` — called by many downstream crates.
-**API**: `DefId::is_local()` — returns `true` only for items in the current crate.
+| Condition | Why | API |
+|-----------|-----|-----|
+| `!def_id.is_local()` | Never act on a function we don't own. | `DefId::is_local()` |
+| Not `DefKind::Fn` / `AssocFn` | Non-fn items have no eliminable body. | `tcx.def_kind` |
+| `DefKind::OpaqueTy` (async fn return) | Eliminating triggers an `E0391` cycle. | `tcx.def_kind` |
+| `DefKind::SyntheticCoroutineBody` | `tcx.visibility()` panics on these — check `def_kind` first. | `tcx.def_kind` |
+| Method of a `dyn`-compatible trait used as `dyn Trait` | Dynamic dispatch calls any impl; BFS from static sites misses it. | `tcx.is_dyn_compatible` + `VTABLE_TRAITS` |
+| `Drop::drop` impl | Drop glue is inserted by the compiler outside the call graph. | `tcx.lang_items().drop_trait()` |
+| Linker-visible (`#[no_mangle]`, `#[used]`, `export_name`, explicit `linkage`) | Called by symbol name from outside Rust. | `tcx.codegen_fn_attrs(def_id)` flags / `export_name` / `linkage` |
+| `entry_fn` | Eliminating `main` traps the binary. | `tcx.entry_fn(())` |
+| `requires_monomorphization` (type/const generics) | Pre-mono BFS cannot know which instantiations are live; matches `reachable.rs::recursively_reachable`. | `tcx.generics_of(def_id).requires_monomorphization(tcx)` |
+| `async fn` | Coroutine transform runs post-MIR-build; eliminating produces an invalid coroutine. | `tcx.asyncness(def_id).is_async()` |
+| Address-taken | Reachable via fn-pointer / closure coercion / `asm! sym`, no direct call edge. | `ADDRESS_TAKEN` (V5a/V5b) |
 
-### Check 2: `DefKind::Fn` or `DefKind::AssocFn`
+What survives this list — and is therefore eliminable when BFS-unreachable —
+is the narrowest class: a **private, non-exported, non-generic, non-async,
+non-Drop, non-address-taken standalone function or inherent-impl method**. A
+BFS bug can affect only that class, and its runtime symptom is an immediate
+`Unreachable` trap, not silent misbehavior.
 
-**What it detects**: Non-function items (types, statics, consts, traits, impls).
-**Failure mode**: Stubbing a type or static would produce a nonsensical MIR body.
-**Example**: `const MAX: u32 = 255` — not a function, cannot be stubbed.
-**API**: `tcx.def_kind(def_id)` returns the `DefKind` enum.
+**Notes on the dropped proxies**
 
-### Check 2a: Vtable check for `AssocFn`
-
-**What it detects**: Trait impl methods where the trait is used as `dyn Trait`.
-**Failure mode**: Dynamic dispatch (`(*trait_object).method()`) calls any impl of
-the trait; BFS from static call sites does not see these calls.
-**Example**: `impl Display for MyError { fn fmt(...) }` where `&dyn Display` is used.
-**API**: `tcx.is_dyn_compatible(trait_def_id)` + `VTABLE_TRAITS` thread-local.
-
-### Check 3: `vis.is_public() && !is_binary_crate`
-
-**What it detects**: Public items in library crates.
-**Failure mode**: Downstream crates that depend on this library may call any pub
-function; we cannot see those call sites.
-**Example**: A pub function in `serde` or `tokio` — called by users we don't see.
-**API**: `tcx.visibility(def_id).is_public()` and `tcx.entry_fn(()).is_some()`.
-**Note**: `tcx.visibility()` panics on `SyntheticCoroutineBody`; always check
-`def_kind` (Check 2) before calling this.
-
-### Check 4: Codegen attribute flags
-
-**What it detects**: Linker-visible symbols: `#[no_mangle]`, `#[used]`,
-`#[export_name]`, `#[link_section]`.
-**Failure mode**: External code (C, OS, linker scripts) calls these by symbol name,
-outside the Rust call graph entirely.
-**Example**: `#[no_mangle] pub extern "C" fn init() { ... }` in embedded firmware.
-**API**: `tcx.codegen_fn_attrs(def_id).flags` and `.symbol_name`, `.linkage`.
-
-### Check 5: `Drop::drop` implementation
-
-**What it detects**: Drop glue — the compiler inserts drop calls at scope exit,
-outside any explicit call graph.
-**Failure mode**: If `drop()` is stubbed, the destructor is replaced by
-`Unreachable`, which either panics or leaves resources leaked (undefined behavior
-for `unsafe` drop impls).
-**Example**: `impl Drop for MutexGuard { fn drop(&mut self) { self.mutex.unlock() } }`.
-**API**: `tcx.lang_items().drop_trait()` compared against the trait's `DefId`.
-
-### Check 6: `entry_fn` check
-
-**What it detects**: The `main` function (or the `#[start]` function).
-**Failure mode**: Stubbing `main` produces a binary that immediately traps.
-**API**: `tcx.entry_fn(()).map(|(id, _)| id) == Some(def_id)`.
-
-### Check 7: `#[test]` and `#[bench]`
-
-**What it detects**: Test functions called by the test harness.
-**Failure mode**: The test harness constructs a list of function pointers to test
-functions at link time; stubbed test functions would panic when the harness calls them.
-**Example**: `#[test] fn test_parses_correctly() { ... }`.
-**API**: `tcx.get_attrs(def_id, rustc_span::sym::test)` and `sym::bench`.
-
-### Check 8: Unsafe functions
-
-**What it detects**: `unsafe fn` items.
-**Failure mode**: Unsafe functions can be called via `mem::transmute` or through
-raw function pointers cast from other types. The safety invariants of such calls
-are not tracked by the type system, so BFS cannot see them.
-**Example**: `unsafe fn memset(ptr: *mut u8, val: u8, len: usize)` (C FFI wrapper).
-**API**: `tcx.fn_sig(def_id).skip_binder().safety().is_unsafe()`.
-
-### Check 9: Generic functions (`generics.count() > 0`)
-
-**What it detects**: Functions with type or lifetime parameters.
-**Failure mode**: BFS runs pre-monomorphization. A generic function `fn foo<T>()` is
-reachable if *any* monomorphization of it is called. Since BFS works on `DefId`
-(not instances), it cannot determine which monomorphizations exist.
-**Example**: `fn serialize<T: Serialize>(val: &T)` — called for many `T`.
-**API**: `tcx.generics_of(def_id).count()`.
-
-### Check 10: Async functions
-
-**What it detects**: `async fn` items.
-**Failure mode**: `async fn` compiles to a coroutine state machine. The generator
-transform runs after MIR building; stubbing the MIR before the transform produces
-an invalid coroutine.
-**Example**: `async fn fetch_data() -> Result<Data, Error>`.
-**API**: `tcx.asyncness(def_id).is_async()`.
-
-### Check 11: Signature contains `FnPtr` or `dyn Trait`
-
-**What it detects**: Functions that accept or return function pointers or trait objects.
-**Failure mode**: If function `bar(f: fn() -> u32)` is unreachable by BFS but is
-registered as a callback via `fn()` pointer, calling it produces a panic.
-**Example**: `fn register_handler(f: fn(Event) -> bool)` in an event system.
-**API**: Walk `tcx.fn_sig(def_id)` inputs and output; check `TyKind::FnPtr` and
-`TyKind::Dynamic`.
+- *`vis.is_public()` library branch (was Check 3 → dropped in P1/V1).* The pass
+  early-returns on library crate types, and in a binary the `reachable_set`
+  seeding (V3) already preserves any `pub` item that needs preserving — no
+  separate visibility branch is needed.
+- *`#[test]`/`#[bench]` (was Check 7 → dropped in P7/V7).* By the time the pass
+  runs, the harness has already lowered the test list into a const initialiser
+  that `reachable_set` covers; the attribute check was a no-op.
+- *unsafe-fn ban (was Check 8 → dropped in P8a/V8a).* "unsafe" was a proxy for
+  "might be address-taken"; address-taken tracking (V5a) is the precise
+  invariant, so unsafe fns are no longer kept unconditionally.
+- *`FnPtr`/`dyn` signature walk (was Check 11 → dropped in P8b/V8b).* Subsumed
+  by `reachable_set` seeding plus address-taken tracking.
 
 ---
 
 ## Test Plan
 
-### New UI tests (to be added in `tests/ui/dead-fn-elimination/`)
+### UI tests
+
+The test matrix lives in `tests/dead-fn-elim/ui/` in cargo-slicer and is
+mirrored into `tests/ui/dead-fn-elimination/` for the in-tree patch. Each file
+targets one numbered concern from the review:
 
 ```
 tests/ui/dead-fn-elimination/
-├── basic.rs          — simple binary, check symbol count reduced
-├── no-stub-pub.rs    — pub fn in lib crate: never stubbed
-├── no-stub-generic.rs — generic fn: never stubbed
-├── no-stub-async.rs  — async fn: never stubbed
-├── no-stub-drop.rs   — Drop impl: never stubbed
-├── no-stub-test.rs   — #[test]: never stubbed
-├── no-stub-no-mangle.rs — #[no_mangle]: never stubbed
-├── vtable-safe.rs    — dyn Trait: impl methods kept
-└── runtime-correct.rs — end-to-end: binary produces correct output
+├── fn-ptr-coercion.rs       — V5a: `as fn()` address-taken fn preserved
+├── closure-fn-ptr.rs        — V5a: closure coerced to fn ptr preserved
+├── inline-asm-sym.rs        — V5b: `asm!(… sym f …)` operand preserved
+├── track-caller.rs          — R2: `#[track_caller]` shim preserved
+├── coroutine.rs             — R3: coroutine body preserved
+├── proc-macro-helper.rs     — R4: proc-macro crate untouched
+├── cross-crate-inlinable.rs — R5: inlinable private fn preserved under LTO
+├── test-harness.rs          — V7: `#[test]` survives `--test`
+├── private-helper-pruned.rs — V9+: unreachable private fn IS eliminated
+└── library-noop.rs          — V1: `--crate-type rlib` eliminates zero fns
 ```
 
 ### Existing test suites that must pass without change
@@ -544,16 +510,17 @@ This patch was developed by the cargo-slicer project team led by @yijunyu. The c
 (BFS reachability from entry points, MIR stub body construction, vtable tracking)
 has been running as an external `RUSTC_WRAPPER` tool since late 2025.
 
-Every line of the proposed patch has been reviewed and understood by the authors.
 The safety invariants were derived from reading the rustc source for:
 - `collect_and_partition_mono_items` (monomorphization collector)
 - `rustc_middle::mir::mono::MonoItem` (CGU item types)
 - The existing `dead_code` lint implementation (`rustc_passes/src/dead.rs`)
 - `rustc_codegen_ssa`'s item traversal
 
-The 11-point checklist was developed iteratively: each check was added after
-observing a category of runtime panics in the external tool during testing on
-real-world projects (ripgrep, helix, zed, rustc itself).
+The `is_safe_to_eliminate` checklist was developed iteratively: each condition
+was added after observing a category of runtime panics in the external tool
+during testing on real-world projects (ripgrep, helix, zed, rustc itself), then
+tightened during @petrochenkov's V1–V11 review (four heuristic proxies replaced
+by `reachable_set` seeding + address-taken tracking).
 
 ### Community Feedback Incorporated
 
