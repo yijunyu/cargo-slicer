@@ -5,7 +5,7 @@
 oracle; 59 crates.io binaries built with zero correctness regressions
 (2026-04-29). Algorithm reflects @petrochenkov's V1–V11 review.
 **Tracking issue**: [yijunyu/cargo-slicer#2](https://github.com/yijunyu/cargo-slicer/issues/2) (project-side; a rust-lang/rust tracking issue will be filed on acceptance)
-**Zulip thread**: pending — to be opened in [`#t-compiler`](https://rust-lang.zulipchat.com/#narrow/stream/131828-t-compiler) before the rust-lang/rust PR
+**Zulip thread**: [`#t-compiler` › -Z dead-fn-elimination](https://rust-lang.zulipchat.com/#narrow/channel/131828-t-compiler/topic/-Z.20dead-fn-elimination.20.28pre-LLVM.20dead.20function.20elimination.29/with/598705425)
 
 ---
 
