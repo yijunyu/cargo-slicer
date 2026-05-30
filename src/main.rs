@@ -627,6 +627,7 @@ fn print_usage() {
     eprintln!("      --old          Use old generation-based slicer (may cause bloat)");
     eprintln!("      --self-upgrade Build slicer with its own sliced dependencies");
     eprintln!("  -h, --help         Show this help message");
+    eprintln!("      --version      Print the cargo-slicer version and exit");
     eprintln!("      --help-advanced  Show all advanced options");
     eprintln!();
     eprintln!("Cargo Feature Flags (passed to cargo metadata and build):");
@@ -806,6 +807,14 @@ fn load_project_features(project_root: &Path) -> std::collections::HashSet<Strin
 
 pub fn main() {
     let args: Vec<String> = env::args().collect();
+
+    // Version fast-path: handle before any cwd-dependent setup so it works from
+    // anywhere. `-V` is intentionally NOT accepted here — it is the short form
+    // of `--virtual` (see the arg loop below); use `--version` or `version`.
+    if args.iter().skip(1).any(|a| a == "--version" || a == "version") {
+        println!("cargo-slicer {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     let mut target_arg: Option<String> = None;
     let mut _locate_crate = false;
