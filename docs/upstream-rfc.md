@@ -4,8 +4,8 @@
 (2026-03-12); `reachable_set ⊆ post-BFS-set` invariant holds on the rust-1.90
 oracle; 59 crates.io binaries built with zero correctness regressions
 (2026-04-29). Algorithm reflects @petrochenkov's V1–V11 review.
-**Tracking issue**: (to be filed)
-**Zulip thread**: (to be opened in `#t-compiler/help`)
+**Tracking issue**: [yijunyu/cargo-slicer#2](https://github.com/yijunyu/cargo-slicer/issues/2) (project-side; a rust-lang/rust tracking issue will be filed on acceptance)
+**Zulip thread**: pending — to be opened in [`#t-compiler`](https://rust-lang.zulipchat.com/#narrow/stream/131828-t-compiler) before the rust-lang/rust PR
 
 ---
 
