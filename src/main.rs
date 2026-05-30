@@ -276,6 +276,124 @@ fn run_script(script_args: &[String]) -> ! {
     std::process::exit(1);
 }
 
+/// `cargo-slicer enable`: make plain `cargo` accelerate transparently by
+/// writing a global `~/.cargo/config.toml` block (rustc-wrapper + env).
+fn cmd_enable() -> ! {
+    use cargo_slicer::transparent;
+    let dispatch = match locate_sibling_bin("cargo_slicer_dispatch") {
+        Some(p) => p,
+        None => {
+            eprintln!("cargo-slicer enable: cannot find `cargo_slicer_dispatch`.");
+            eprintln!("  It must sit next to this binary or be on PATH.");
+            eprintln!("  Reinstall with the official installer, then retry.");
+            std::process::exit(1);
+        }
+    };
+    match transparent::enable(&dispatch) {
+        Ok(cfg) => {
+            println!("Transparent cargo: ENABLED");
+            println!("  wrote: {}", cfg.display());
+            println!("  wrapper: {}", dispatch.display());
+            println!();
+            println!("Plain `cargo build --release` is now accelerated in every project.");
+            println!("The wrapper prefers `-Z dead-fn-elimination` when your rustc supports");
+            println!("it, and otherwise builds normally until a project is opted in with");
+            println!("`cargo-slicer pre-analyze`. Turn this off with `cargo-slicer disable`.");
+            if let Some(legacy) = transparent::legacy_warning(&cfg) {
+                println!();
+                println!("WARNING: a legacy config exists at {}", legacy.display());
+                println!("  cargo prefers it over config.toml, so the wrapper may be ignored.");
+                println!("  Move its contents into {} to be safe.", cfg.display());
+            }
+            // An environment RUSTC_WRAPPER overrides `[build] rustc-wrapper`, so
+            // the config we just wrote would be silently ignored. Warn loudly.
+            if let Ok(w) = std::env::var("RUSTC_WRAPPER") {
+                if !w.is_empty() {
+                    println!();
+                    println!("WARNING: RUSTC_WRAPPER={} is set in your environment.", w);
+                    println!("  That env var OVERRIDES the config we just wrote, so cargo will use");
+                    println!("  it instead of cargo-slicer. Unset it (e.g. remove the export from");
+                    println!("  your shell profile) for transparent acceleration to take effect.");
+                }
+            }
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("cargo-slicer enable: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `cargo-slicer disable`: remove the managed global-config block.
+fn cmd_disable() -> ! {
+    use cargo_slicer::transparent;
+    match transparent::disable() {
+        Ok((cfg, true)) => {
+            println!("Transparent cargo: DISABLED");
+            println!("  edited: {}", cfg.display());
+            println!("  plain `cargo` no longer routes through cargo-slicer.");
+            std::process::exit(0);
+        }
+        Ok((cfg, false)) => {
+            println!("Transparent cargo was not enabled (no managed block in {}).", cfg.display());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("cargo-slicer disable: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `cargo-slicer status`: report whether transparent cargo is active.
+fn cmd_status() -> ! {
+    use cargo_slicer::transparent;
+    match transparent::status() {
+        Ok(transparent::Status::EnabledStale { found, config }) => {
+            let current = locate_sibling_bin("cargo_slicer_dispatch")
+                .map(|p| p.display().to_string());
+            match current {
+                Some(cur) if cur == found => {
+                    println!("Transparent cargo: ENABLED");
+                    println!("  config:  {}", config.display());
+                    println!("  wrapper: {}", found);
+                }
+                Some(cur) => {
+                    println!("Transparent cargo: ENABLED (stale wrapper path)");
+                    println!("  config:  {}", config.display());
+                    println!("  config points at: {}", found);
+                    println!("  this binary's dispatch: {}", cur);
+                    println!("  run `cargo-slicer enable` to refresh.");
+                }
+                None => {
+                    println!("Transparent cargo: ENABLED");
+                    println!("  config:  {}", config.display());
+                    println!("  wrapper: {}", found);
+                }
+            }
+            std::process::exit(0);
+        }
+        Ok(transparent::Status::Disabled { config }) => {
+            println!("Transparent cargo: DISABLED");
+            println!("  config:  {}", config.display());
+            println!("  enable with `cargo-slicer enable`.");
+            std::process::exit(0);
+        }
+        // status() never returns Enabled directly (path comparison done above).
+        Ok(transparent::Status::Enabled { dispatch, config }) => {
+            println!("Transparent cargo: ENABLED");
+            println!("  config:  {}", config.display());
+            println!("  wrapper: {}", dispatch.display());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("cargo-slicer status: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Look for a sibling binary next to the currently running executable, then PATH.
 fn locate_sibling_bin(name: &str) -> Option<PathBuf> {
     if let Ok(me) = std::env::current_exe() {
@@ -536,6 +654,12 @@ fn print_usage() {
     eprintln!("                     Example: cargo-slicer build --release");
     eprintln!("  -V, --virtual      Virtual slicing: skip unused code at codegen without");
     eprintln!("                     modifying source files or Cargo.toml");
+    eprintln!();
+    eprintln!("Transparent cargo (plain `cargo` builds accelerated):");
+    eprintln!("  enable             Route every `cargo build` through cargo-slicer by writing a");
+    eprintln!("                     global ~/.cargo/config.toml block. After this, just use `cargo`.");
+    eprintln!("  disable            Remove that block; plain `cargo` behaves normally again.");
+    eprintln!("  status             Report whether transparent cargo is currently enabled.");
     eprintln!();
     eprintln!("cargo-script (nightly -Zscript):");
     eprintln!("  script <file.rs> [args...]   Run a single-file Rust script with slicer enabled.");
@@ -1115,6 +1239,9 @@ pub fn main() {
                     }
                 }
             }
+            "enable" => cmd_enable(),
+            "disable" => cmd_disable(),
+            "status" => cmd_status(),
             "script" => {
                 // cargo-script (nightly -Zscript) with cargo-slicer enabled.
                 // Usage: cargo-slicer script <file.rs> [script-args...]
