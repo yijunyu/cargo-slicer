@@ -285,6 +285,158 @@ pass *would* run on `b` and eliminate `b_dead` and `b_private` there — illustr
 why the per-crate entry point, not cross-crate graph walking, is what unlocks
 elimination of a library's dead code.
 
+## Cross-process dataflow
+
+The single-process flowchart above is what the flag does **today**: each `rustc`
+invocation analyses only its own crate, in isolation. That is also its central
+limitation — a library `rustc` has already finished (and codegen'd every `pub fn`)
+long before the binary `rustc` discovers which of those functions the program
+actually reaches.
+
+Eliminating a *library's* dead code therefore requires dataflow **between** the
+two `rustc` processes: the library must emit metadata the binary can read, the
+binary's reachability result must flow **back**, and the library's codegen must be
+deferred until that answer arrives. Cargo already pipelines metadata forward
+(`.rmeta` is produced before the binary starts); the missing edge is the feedback.
+
+```mermaid
+flowchart TB
+    subgraph A ["rustc #1 · crate A — lib"]
+        direction TB
+        AS["Source"] --> APR["Parse"] --> AAST["AST"] --> AHIR["HIR"] --> AMIR["MIR"]
+        AMIR -.opt.-> APASS["Pass / reachability"]
+        APASS --> ANORM["normal codegen"]
+        APASS -.->|"unreachable fns"| ANOP["nop / stub bodies"]
+        AAST -->|"emit"| ARMETA["A.rmeta (metadata)"]
+        AMIR -->|"emit"| ARLIB["A.rlib (deferred body MIR)"]
+        ANORM --> ALLVM["LLVM"]
+        ANOP -.-> ALLVM
+    end
+
+    subgraph M ["rustc #2 · crate main — bin"]
+        direction TB
+        MS["Source"] --> MPR["Parse"] --> MAST["AST"] --> MHIR["HIR"] --> MMIR["MIR"]
+        MMIR --> MAN["reachability analysis<br/>(this flag)"]
+        MAN --> MLLVM["LLVM"]
+    end
+
+    ARMETA ==>|"read at name resolution"| MAST
+    ARLIB  ==>|"read for cross-crate MIR"| MAN
+    MAN -.->|"FEEDBACK: which A fns are reachable"| APASS
+
+    classDef fb fill:#fde,stroke:#c39
+    class MAN,APASS fb
+```
+
+Reading the diagram against Oli's three boxes-per-stage sketch:
+
+- **Forward (metadata) edges** — solid double arrows. `A.rmeta` is produced at A's
+  name-resolution/AST stage and read by `main` during its own parse/resolve;
+  `A.rlib` carries the (deferred) MIR bodies that `main`'s analysis reads to build
+  the cross-crate call graph. This direction already exists in stock cargo
+  pipelining.
+- **Feedback edge** — the dashed arrow from `main`'s analysis back to A's `Pass`
+  stage. This is the part the in-tree flag does **not** yet have: `main` knows
+  which of A's functions are reachable, but by then A's `rustc` has exited.
+- **The `nop` box** — A's codegen, *if* it could receive the feedback, would emit
+  stub (`nop`) bodies for its unreachable functions instead of real code, the way
+  the binary already drops its own dead functions from CGUs.
+
+### Why the in-tree flag stops at the dashed edge
+
+Wiring that feedback into stock `rustc` would mean either (a) re-invoking the
+library `rustc` after the binary's analysis — a second codegen pass per library —
+or (b) deferring all library codegen until the whole graph is known and driving it
+from a cargo-level orchestrator. Both are out of scope for a single `-Z` flag: the
+flag deliberately limits itself to the one process that already has an entry point
+(the binary), where the reachable set is computable without any cross-process
+round-trip.
+
+The cross-process loop is exactly what the out-of-tree `cargo-slicer`
+prototype implements with **deferred (two-pass) compilation**: pass 1 compiles
+every library to `--emit=metadata` only (no LLVM), the binary's analysis computes
+the global reachable set, and pass 2 re-runs library codegen with the dead
+functions filtered out of their CodegenUnits. The in-tree flag is the
+single-process kernel of that design — sound on its own, and the validated basis
+for a future cargo-orchestrated version that closes the dashed feedback edge. The
+next section reports what an in-tree reference implementation of that edge actually
+showed, and where the transparent version's cost really sits.
+
+## Closing the feedback edge in-tree — what a prototype showed
+
+Rather than estimate the cost, a reference implementation was built directly in the
+compiler and run end-to-end against a `stage1` `rustc`. The finding is concrete:
+the cross-crate library elimination is implementable in a small amount of compiler
+code with **no cargo source changes** — but the only way to do it that way is *not*
+transparent, and that is the real obstacle, not the line count.
+
+### The library side reuses the existing pass
+
+The prototype confirmed that a library needs no new analysis. `run_analysis` today
+early-returns for any crate without an `entry_fn`; the prototype lets a library
+proceed instead *when handed a seed set computed by the binary*. The BFS, the
+safety checklist, and the `is_codegened_item` override are unchanged. The only
+genuinely new compiler code is:
+
+- reading extern-crate MIR in the binary (`tcx.optimized_mir(extern_def_id)`
+  guarded by `is_mir_available`) to extend the call graph across crates;
+- serialising the reached upstream functions by **`DefPathHash`** (stable across
+  crates and compiler processes) so a later library invocation can map them back to
+  its own local `DefId`s.
+
+The hundreds of lines that make the out-of-tree `cargo-slicer` look large — a
+fork-server daemon, a Windows named-pipe daemon, the placeholder-`.rlib`
+ar-archive trick, `RUSTC_WRAPPER`-chain threading, `sccache` integration, the
+skip-driver heuristic — are wrapper scaffolding and did not appear in the in-tree
+prototype at all.
+
+### What was verified
+
+Built from the patch, a `stage1` `rustc` on a `Main` → `a` → `b` program produced:
+
+- **Single-pass binary kernel** (one build, no extra flags): the binary emits
+  `note: N unreachable functions excluded from codegen by -Z dead-fn-elimination`.
+  This is the behaviour proposed for stabilisation.
+- **Cross-crate feedback** (prototype): the binary pass walked `a`'s and `b`'s MIR
+  and wrote a sidecar naming exactly the reached upstream function (`b::b_used`),
+  omitting the dead ones (`b::b_dead_*`); a subsequent library invocation read that
+  sidecar and used it as its seed set.
+
+The data flow works. The reachability is correct.
+
+### Why this prototype is not the proposal
+
+To make a library actually *recompile* against the binary's result, the prototype
+needs **two `cargo build`s** — the second with a changed `RUSTFLAGS` value so cargo
+re-fingerprints and rebuilds the otherwise-unchanged libraries — and an env var
+naming the sidecar. That reintroduces exactly the out-of-band orchestration that
+moving in-tree was meant to remove. A `-Z` flag that needs a second pass and an
+environment variable is not the transparent, single-build flag the rest of this
+page describes.
+
+So the prototype establishes a precise boundary:
+
+- cross-crate elimination *can* be done with no cargo patch, but only
+  **non-transparently** (two passes);
+- making it transparent — one `cargo build`, libraries sliced automatically —
+  requires cargo to **defer library codegen until after the binary's analysis**:
+
+  1. compile every library with `--emit=metadata` (no codegen) — rustc already
+     supports this, so the prototype's placeholder-`.rlib` trick is unnecessary
+     in-tree;
+  2. run the binary's analysis to compute the global reachable set;
+  3. re-invoke each library's codegen with its dead functions filtered out.
+
+Step 3 is a scheduling change to cargo's build graph, and therefore a Cargo-team
+decision rather than a rustc patch. That, not the volume of compiler code, is the
+substantive cost behind the dashed edge.
+
+The in-tree flag deliberately stops at the single-process kernel: it is sound and
+transparent on its own and can be reviewed and stabilised without committing cargo
+to deferred-codegen scheduling. The cross-crate prototype is kept as evidence that
+the feedback edge is implementable, and as the basis for a future cargo-orchestrated
+version — not as something to ship as-is.
+
 ## Correctness invariant
 
 In debug builds the pass asserts `reachable_set(()) ⊆ post-BFS reachable`. Because
