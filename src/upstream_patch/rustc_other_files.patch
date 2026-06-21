@@ -1,8 +1,8 @@
 diff --git a/compiler/rustc_driver_impl/src/lib.rs b/compiler/rustc_driver_impl/src/lib.rs
-index 9a3d7cc506c..1fd66b2fe31 100644
+index c926a7c742a..d2e89ba5380 100644
 --- a/compiler/rustc_driver_impl/src/lib.rs
 +++ b/compiler/rustc_driver_impl/src/lib.rs
-@@ -270,6 +270,14 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+@@ -273,6 +273,14 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
  
      callbacks.config(&mut config);
  
@@ -17,7 +17,7 @@ index 9a3d7cc506c..1fd66b2fe31 100644
      let registered_lints = config.register_lints.is_some();
  
      interface::run_compiler(config, |compiler| {
-@@ -370,6 +378,13 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+@@ -373,6 +381,13 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
                  dump_feature_usage_metrics(tcx, metrics_dir);
              }
  
@@ -31,7 +31,7 @@ index 9a3d7cc506c..1fd66b2fe31 100644
              if callbacks.after_analysis(compiler, tcx) == Compilation::Stop {
                  return early_exit();
              }
-@@ -391,6 +406,30 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
+@@ -394,6 +409,89 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send))
      })
  }
  
@@ -43,6 +43,8 @@ index 9a3d7cc506c..1fd66b2fe31 100644
 +    providers: &mut rustc_middle::util::Providers,
 +) {
 +    providers.queries.is_codegened_item = dead_fn_elim_is_codegened_item;
++    providers.queries.collect_and_partition_mono_items =
++        dead_fn_elim_collect_and_partition_mono_items;
 +}
 +
 +/// Returns `false` for functions identified as unreachable by `-Z dead-fn-elimination`,
@@ -55,8 +57,65 @@ index 9a3d7cc506c..1fd66b2fe31 100644
 +            return false;
 +        }
 +    }
-+    // Otherwise fall back to the standard provider (checks all_mono_items).
-+    tcx.collect_and_partition_mono_items(()).all_mono_items.contains(&def_id)
++    // Delegate to the upstream impl shim (not the query, which is overridden here —
++    // calling the query would recurse infinitely).
++    rustc_monomorphize::partitioning::collect_and_partition_mono_items_impl(tcx, ())
++        .all_mono_items
++        .contains(&def_id)
++}
++
++/// Rebuild the CodegenUnits with BFS-eliminable local functions removed entirely,
++/// so they occupy no CGU and the backend schedules less parallel codegen work.
++///
++/// Suppressing `is_codegened_item` alone leaves the items in their CGUs (the unit is
++/// still allocated and scheduled); dropping them here is what actually reduces
++/// per-CGU and whole-program codegen cost on binary crates.
++fn dead_fn_elim_collect_and_partition_mono_items<'tcx>(
++    tcx: TyCtxt<'tcx>,
++    (): (),
++) -> rustc_middle::mir::mono::MonoItemPartitions<'tcx> {
++    use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
++
++    // Original partitions from the upstream impl shim (avoids query recursion).
++    let original =
++        rustc_monomorphize::partitioning::collect_and_partition_mono_items_impl(tcx, ());
++
++    let eliminable = |item: &MonoItem<'tcx>| -> bool {
++        matches!(item, MonoItem::Fn(instance)
++            if instance.def_id().is_local()
++                && rustc_mir_transform::dead_fn_elim::is_eliminable(
++                    instance.def_id().index.as_u32() as u64,
++                ))
++    };
++
++    // Fast path: nothing to drop -> return the original allocation untouched.
++    if !original.codegen_units.iter().any(|cgu| cgu.items().keys().any(eliminable)) {
++        return original;
++    }
++
++    let mut new_cgus: Vec<CodegenUnit<'tcx>> =
++        Vec::with_capacity(original.codegen_units.len());
++    for orig in original.codegen_units {
++        let mut cgu = CodegenUnit::new(orig.name());
++        if orig.is_primary() {
++            cgu.make_primary();
++        }
++        for (item, data) in orig.items() {
++            // Keep inlined copies (a non-eliminable caller may have inlined the body);
++            // drop only canonical definitions of eliminable functions.
++            if eliminable(item) && !data.inlined {
++                continue;
++            }
++            cgu.items_mut().insert(*item, *data);
++        }
++        cgu.compute_size_estimate();
++        new_cgus.push(cgu);
++    }
++
++    rustc_middle::mir::mono::MonoItemPartitions {
++        codegen_units: tcx.arena.alloc_from_iter(new_cgus),
++        all_mono_items: original.all_mono_items,
++    }
 +}
 +
  fn dump_feature_usage_metrics(tcxt: TyCtxt<'_>, metrics_dir: &Path) {
@@ -107,10 +166,10 @@ index b87ab840a32..3fc4aca7046 100644
      let collection_strategy = if tcx.sess.link_dead_code() {
          MonoItemCollectionStrategy::Eager
 diff --git a/compiler/rustc_session/src/options.rs b/compiler/rustc_session/src/options.rs
-index 7c7e9118d59..226c877b10b 100644
+index b89aec7d22a..103ad8930cb 100644
 --- a/compiler/rustc_session/src/options.rs
 +++ b/compiler/rustc_session/src/options.rs
-@@ -2283,6 +2283,8 @@ pub(crate) fn parse_align(slot: &mut Option<Align>, v: Option<&str>) -> bool {
+@@ -2252,6 +2252,8 @@ pub(crate) fn parse_align(slot: &mut Option<Align>, v: Option<&str>) -> bool {
          "emit type and line information for additional data types (default: no)"),
      debuginfo_compression: DebugInfoCompression = (DebugInfoCompression::None, parse_debuginfo_compression, [TRACKED],
          "compress debug info sections (none, zlib, zstd, default: none)"),

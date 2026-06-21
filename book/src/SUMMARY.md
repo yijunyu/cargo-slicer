@@ -4,6 +4,7 @@
 - [Getting Started](getting-started.md)
 - [How It Works](how-it-works.md)
   - [Virtual Slicer](virtual-slicer.md)
+  - [Sound Source-Prune](sound-prune.md)
   - [Warm-Cache Daemon](warm-cache.md)
   - [The All-in-One Script](all-in-one.md)
 - [Usage Reference](usage.md)

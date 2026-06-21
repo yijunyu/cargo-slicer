@@ -415,6 +415,78 @@ fn locate_sibling_bin(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Two-pass sound slicing orchestrator. Returns a process exit code.
+///
+/// Pass 1 (oracle): build with `CARGO_SLICER_ORACLE=1` and stubbing disabled.
+/// The driver dumps each crate's true `all_mono_items` to `<crate>.reachable`.
+/// `pre-analyze` then folds `.reachable` into the marked set as force-keeps.
+/// Pass 2 (sliced): build with stubbing on; only fns absent from `.reachable`
+/// (truly dead) are stubbed, so the output binary is sound by construction.
+fn run_oracle_build(extra: &[String]) -> i32 {
+    use std::process::Command;
+
+    let dispatch = match locate_sibling_bin("cargo_slicer_dispatch") {
+        Some(d) => d,
+        None => {
+            eprintln!("cargo-slicer oracle-build: cannot find `cargo_slicer_dispatch` on PATH.");
+            return 1;
+        }
+    };
+
+    // Helper: run `cargo +nightly build --release <extra>` with the slicer wrapper
+    // and the given extra env vars. Returns the exit code.
+    let run_build = |label: &str, oracle: bool| -> i32 {
+        eprintln!("[oracle-build] {} ...", label);
+        // cargo clean first so every crate goes through the driver this pass.
+        let _ = Command::new("cargo").arg("clean").status();
+        let mut cmd = Command::new("cargo");
+        cmd.arg("+nightly").arg("build").arg("--release");
+        for a in extra { cmd.arg(a); }
+        cmd.env("CARGO_SLICER_VIRTUAL", "1")
+            .env("CARGO_SLICER_CODEGEN_FILTER", "1")
+            .env("CARGO_SLICER_SKIP_THRESHOLD", "never")
+            .env("RUSTC_WRAPPER", &dispatch);
+        if oracle {
+            cmd.env("CARGO_SLICER_ORACLE", "1");
+        } else {
+            cmd.env_remove("CARGO_SLICER_ORACLE");
+        }
+        match cmd.status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(e) => { eprintln!("[oracle-build] cargo failed to start: {}", e); 1 }
+        }
+    };
+
+    // Pass 1: oracle (no stubbing, dumps .reachable).
+    let rc1 = run_build("pass 1/3: oracle (dump true reachable set, no stubbing)", true);
+    if rc1 != 0 {
+        eprintln!("[oracle-build] oracle pass failed (exit {}); aborting.", rc1);
+        return rc1;
+    }
+
+    // pre-analyze: fold .reachable into .cache/.seeds as force-keeps.
+    eprintln!("[oracle-build] pass 2/3: pre-analyze (fold .reachable into seeds)");
+    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let parser_name = std::env::var("CARGO_SLICER_PARSER")
+        .unwrap_or_else(|_| "syn".to_string());
+    if let Err(e) =
+        cargo_slicer::pre_analyze::run_pre_analysis_with_backend(&workspace_root, &parser_name)
+    {
+        eprintln!("[oracle-build] pre-analyze failed: {}", e);
+        return 1;
+    }
+
+    // Pass 2: sliced build (stubs only truly-dead fns).
+    let rc2 = run_build("pass 3/3: sliced build (stub only truly-dead fns)", false);
+    if rc2 != 0 {
+        eprintln!("[oracle-build] sliced pass failed (exit {}).", rc2);
+        return rc2;
+    }
+
+    eprintln!("[oracle-build] done. Output binary is sound (only oracle-dead fns stubbed).");
+    0
+}
+
 /// Detect whether `rustc +nightly -Z help` lists `dead-fn-elimination`.
 fn rustc_supports_dead_fn_elim() -> bool {
     let out = std::process::Command::new("rustup")
@@ -661,6 +733,17 @@ fn print_usage() {
     eprintln!("                     global ~/.cargo/config.toml block. After this, just use `cargo`.");
     eprintln!("  disable            Remove that block; plain `cargo` behaves normally again.");
     eprintln!("  status             Report whether transparent cargo is currently enabled.");
+    eprintln!();
+    eprintln!("Sound source-prune (no nightly, no upstream patch):");
+    eprintln!("  sound-prune        Build once, read the linker's reachability (nm), then mirror");
+    eprintln!("                     the workspace with unused fn bodies replaced by unimplemented!().");
+    eprintln!("                     The seed is link ground-truth, so a wrong prune fails the build");
+    eprintln!("                     LOUDLY — never miscompiles to a crash.");
+    eprintln!("    -o, --output DIR   Output dir for the pruned project (default: <project>-pruned)");
+    eprintln!("    --delete           Remove private unused fns entirely (default: stub the body)");
+    eprintln!("    --vendor           EXPERIMENTAL: also cargo-vendor + prune dependency sources");
+    eprintln!("                       (default is workspace-only — safer, no vendor/build-dep risk)");
+    eprintln!("    Then: cd <output> && cargo build   (plain cargo; no slicer needed to build)");
     eprintln!();
     eprintln!("cargo-script (nightly -Zscript):");
     eprintln!("  script <file.rs> [args...]   Run a single-file Rust script with slicer enabled.");
@@ -1187,6 +1270,58 @@ pub fn main() {
                         std::process::exit(1);
                     }
                 }
+            }
+            "sound-prune" => {
+                // Sound userspace source-prune driven by linker truth:
+                //   pass1 cargo build -> nm binary -> used dep fns (SOUND oracle)
+                //   pass2 mirror + stub unused fn bodies -> pruned project
+                //   pass3 user runs plain `cargo build` in the pruned dir (deps cheap)
+                // Unlike the old BFS marking, the seed is the linker's own reachability,
+                // so it never drops a reachable fn -> no SIGILL; a mistake is a compile error.
+                let workspace_root = std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut out = workspace_root.join("..").join(format!(
+                    "{}-pruned",
+                    workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or("project")
+                ));
+                let mut mode = cargo_slicer::generate::StubMode::Replace;
+                let mut vendor = false;
+                let mut j = i + 1;
+                while j < args.len() {
+                    match args[j].as_str() {
+                        "--output" | "-o" if j + 1 < args.len() => {
+                            out = std::path::PathBuf::from(&args[j + 1]);
+                            j += 2;
+                        }
+                        "--delete" => {
+                            mode = cargo_slicer::generate::StubMode::Delete;
+                            j += 1;
+                        }
+                        "--vendor" => {
+                            vendor = true;
+                            j += 1;
+                        }
+                        _ => j += 1,
+                    }
+                }
+                match cargo_slicer::sound_seeds::run_sound_prune(&workspace_root, &out, mode, vendor) {
+                    Ok(()) => std::process::exit(0),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "oracle-build" => {
+                // Two-pass sound slicing:
+                //   Pass 1 (oracle): build with stubbing disabled; the driver dumps
+                //     each crate's TRUE all_mono_items to <crate>.reachable.
+                //   pre-analyze: folds .reachable into .cache/.seeds as force-keeps.
+                //   Pass 2 (sliced): build with stubbing on; only fns absent from
+                //     .reachable (truly dead) are stubbed → sound by construction.
+                // Extra args after `oracle-build` are passed to every cargo invocation.
+                let extra: Vec<String> = args[i+1..].to_vec();
+                std::process::exit(run_oracle_build(&extra));
             }
             "gcc-bfs" => {
                 // Run cross-crate BFS on a directory of .analysis files.
